@@ -114,18 +114,39 @@ tap the UID itself to select it.
 Two places need the UID.
 
 **a. The Firestore rules.** Firebase console → **Firestore Database → Rules**.
-The editor works fine on an iPad. Find this line:
+The editor works fine on an iPad.
+
+What you'll see is Firebase's deny-all default, which looks like this and
+contains nothing to edit:
 
 ```
-return request.auth != null && request.auth.uid == 'OWNER_UID_HERE';
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
 ```
 
-Replace `OWNER_UID_HERE` with your UID, keeping the quotes. **Publish.**
+**Select all of it and replace it** with the contents of `firestore.rules` from
+this repo. On an iPad the easiest way to get that text is github.com → the repo
+→ `firestore.rules` → the **Raw** button → select all → copy.
 
-If the rules editor shows something other than the rules in this repo (a fresh
-project starts with a deny-all default), copy the full contents of
-`firestore.rules` from the repo on github.com and paste them in, then replace
-the UID.
+Then find `OWNER_UID_HERE` — it appears once, on the `function isOwner()` line —
+and replace it with your UID, **keeping the single quotes** around it:
+
+```
+return request.auth != null && request.auth.uid == 'your-uid-here';
+```
+
+**Publish.**
+
+The pasted rules end with their own `allow read, write: if false;` catch-all.
+That is meant to be there — it denies anything the rules above don't explicitly
+allow.
 
 **b. The build.** github.com → **Settings → Secrets and variables → Actions →
 Variables → New repository variable** → `VITE_OWNER_UID` = your UID. Then
