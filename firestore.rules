@@ -1,0 +1,52 @@
+rules_version = '2';
+
+// Album Ranker — single-user database.
+//
+// The client bundle is public (GitHub Pages), so the Firebase config in it is
+// public too. That is fine and expected: all access control lives here.
+//
+// Note this checks a specific UID, not merely `request.auth != null` — anyone
+// can create a Google account and authenticate against this Firebase project,
+// so "is signed in" would be no protection at all.
+//
+// Replace OWNER_UID_HERE with your UID before deploying. See SETUP.md step 5.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner() {
+      return request.auth != null && request.auth.uid == 'OWNER_UID_HERE';
+    }
+
+    match /albums/{albumId} {
+      allow read, write: if isOwner();
+    }
+
+    match /comparisons/{comparisonId} {
+      allow read: if isOwner();
+
+      // The comparison log is append-only. Ratings are derived by replaying it,
+      // so an edited or deleted entry would silently rewrite history — and the
+      // ability to recompute from a trustworthy log is the whole design.
+      allow create: if isOwner()
+        && request.resource.data.keys().hasAll(['albumA', 'albumB', 'winner', 'comparedAt'])
+        && request.resource.data.albumA is string
+        && request.resource.data.albumB is string
+        && request.resource.data.albumA != request.resource.data.albumB
+        && request.resource.data.winner is string
+        && (
+          request.resource.data.winner == 'skip'
+          || request.resource.data.winner == 'tie'
+          || request.resource.data.winner == request.resource.data.albumA
+          || request.resource.data.winner == request.resource.data.albumB
+        )
+        && request.resource.data.comparedAt is number;
+
+      allow update, delete: if false;
+    }
+
+    // Anything not matched above is denied.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
