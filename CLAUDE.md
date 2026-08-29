@@ -215,9 +215,27 @@ against this Firebase project, so "is signed in" would be no protection at all.
 message instead of a wall of permission-denied errors. It is not enforcement and
 cannot be.
 
+**Sign-in is `signInWithPopup`, not `signInWithRedirect`, and must stay that
+way.** The redirect flow needs to read a pending credential back from storage on
+the Firebase auth domain after returning. Safari's tracking prevention
+partitions that storage whenever the app is served from a different origin than
+the auth domain — which is always true here (`*.github.io` versus
+`*.firebaseapp.com`). Firebase's documented fixes are a reverse proxy or a
+self-hosted auth handler, and a static host can provide neither. The popup runs
+as a first-party context and works. The cost is that mobile Safari blocks
+popups that don't open directly from a tap, so `signIn()` names that failure
+explicitly rather than surfacing a raw `auth/popup-blocked`.
+
 Setup order matters: before `VITE_OWNER_UID` is set, the app treats the first
 signed-in user as owner so it can show them the UID they need to paste in. The
-Settings tab warns loudly until this is done. See `SETUP.md` step 5.
+Settings tab warns loudly until this is done.
+
+`SETUP.md` documents a **deploy-first** ordering, because the whole setup can be
+done from an iPad with no local machine, and the UID is only visible by signing
+in to a deployed build. That ordering is safe purely because Firestore in
+production mode denies everything until the owner rule is published — so the
+window between deploying and locking down grants no access. If that assumption
+ever changes, the ordering has to change with it.
 
 ## Testing
 

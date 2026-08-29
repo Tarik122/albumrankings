@@ -14,7 +14,7 @@ interface Props {
 }
 
 export function SettingsView({ user, albums, comparisons }: Props) {
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<'done' | 'failed' | null>(null)
   const [spotify, setSpotify] = useState(isConnected())
 
   return (
@@ -22,17 +22,22 @@ export function SettingsView({ user, albums, comparisons }: Props) {
       <Section title="Account">
         <Field label="Signed in as" value={user.email ?? '—'} />
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <Field label="Your Firebase UID" value={user.uid} mono />
+          <Field label="Your Firebase UID" value={user.uid} mono selectable />
           <button
             type="button"
             onClick={() => {
-              void navigator.clipboard.writeText(user.uid)
-              setCopied(true)
-              setTimeout(() => setCopied(false), 2000)
+              // The clipboard API is unavailable in some mobile browser
+              // contexts, so say so rather than claiming a copy that never
+              // happened — the UID above selects in one tap as a fallback.
+              navigator.clipboard
+                ?.writeText(user.uid)
+                .then(() => setCopied('done'))
+                .catch(() => setCopied('failed')) ?? setCopied('failed')
+              setTimeout(() => setCopied(null), 3000)
             }}
             className="rounded-lg border border-ink-700 px-3 py-1.5 text-xs text-ink-300 hover:text-white"
           >
-            {copied ? 'Copied' : 'Copy UID'}
+            {copied === 'done' ? 'Copied' : copied === 'failed' ? 'Tap the UID to select' : 'Copy UID'}
           </button>
         </div>
 
@@ -40,12 +45,13 @@ export function SettingsView({ user, albums, comparisons }: Props) {
           <Callout tone="warn">
             <p className="font-medium text-amber-300">The database is not locked down yet.</p>
             <p className="mt-1">
-              Copy the UID above into <code className="text-amber-300">VITE_OWNER_UID</code> in
-              your <code className="text-amber-300">.env.local</code>, and replace{' '}
+              Put the UID above into <code className="text-amber-300">VITE_OWNER_UID</code> — a
+              GitHub repository variable if you deploy from Actions, or{' '}
+              <code className="text-amber-300">.env.local</code> if you run locally — and replace{' '}
               <code className="text-amber-300">OWNER_UID_HERE</code> in{' '}
               <code className="text-amber-300">firestore.rules</code> with the same value, then
-              publish the rules in the Firebase console. Until you do, anyone with a Google account
-              can read and write your data.
+              publish the rules in the Firebase console. Until the rules are published, this
+              database is only safe because Firestore denies everything by default.
             </p>
           </Callout>
         ) : ownerUid === user.uid ? (
@@ -71,7 +77,7 @@ export function SettingsView({ user, albums, comparisons }: Props) {
 
       <Section title="Spotify">
         <Field label="Client id" value={spotifyClientId || 'not configured'} mono />
-        <Field label="Redirect URI" value={spotifyRedirectUri} mono />
+        <Field label="Redirect URI" value={spotifyRedirectUri} mono selectable />
         <p className="text-xs text-ink-700">
           This exact URI must be registered in the Spotify dashboard, character for character. In
           local development Spotify requires the loopback IP — <code>127.0.0.1</code>, not{' '}
@@ -149,11 +155,29 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
-function Field({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+function Field({
+  label,
+  value,
+  mono,
+  selectable,
+}: {
+  label: string
+  value: string
+  mono?: boolean
+  /** Wrap rather than truncate, and select in one tap — for values meant to be
+   *  copied by hand when the clipboard API is unavailable. */
+  selectable?: boolean
+}) {
   return (
     <div className="min-w-0">
       <p className="text-xs text-ink-500">{label}</p>
-      <p className={`truncate text-sm text-white ${mono ? 'font-mono' : ''}`}>{value}</p>
+      <p
+        className={`text-sm text-white ${mono ? 'font-mono' : ''} ${
+          selectable ? 'break-all select-all' : 'truncate'
+        }`}
+      >
+        {value}
+      </p>
     </div>
   )
 }

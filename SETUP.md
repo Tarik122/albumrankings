@@ -1,11 +1,27 @@
 # Setup
 
 Everything here needs a browser and your accounts, so these are the steps I
-can't do for you. They're in dependency order — each one unblocks the next.
+can't do for you.
 
-Times are rough. The whole thing is about 30 minutes.
+**You do not need a computer.** All four dashboards (Firebase, Spotify, GitHub,
+and the app itself) work in Safari on an iPad, and GitHub Actions does the build
+— nothing is compiled locally. Follow **Part A**. Part B is optional and only
+matters if you later want to run the app on a laptop.
+
+About 30 minutes.
 
 ---
+
+# Part A — the browser-only path
+
+The ordering here matters, and it's different from what you might expect. You
+need your Firebase UID to lock the database, but you can only see that UID by
+signing in to the deployed app. So the app gets deployed *first*, in a state
+where it can't read anything, and gets locked down in step 6.
+
+That gap is safe: Firestore in production mode denies every request until you
+publish a rule saying otherwise. The app will show a permissions error until
+step 6, and that error is the database working correctly.
 
 ## 1. Check your Spotify account is Premium (1 min)
 
@@ -16,125 +32,42 @@ confirm it says Premium.
 If it doesn't, everything except the Spotify import still works — manual album
 entry, comparisons, the leaderboard. You'd just be typing albums in by hand.
 
----
-
 ## 2. Create the Firebase project (5 min)
 
-1. Go to <https://console.firebase.google.com/> → **Add project**. Name it
-   whatever you like. Google Analytics is not needed — turn it off.
-2. In the left sidebar: **Build → Firestore Database → Create database**.
-   - Start in **production mode**. (We're replacing the rules in step 5 anyway,
-     and test mode would leave the database world-writable in the meantime.)
-   - Pick the region closest to you. This can't be changed later.
-3. **Build → Authentication → Get started → Google → Enable**. Set yourself as
+At <https://console.firebase.google.com/> — the console is usable on an iPad,
+though it's cramped; landscape helps.
+
+1. **Add project.** Name it anything. Turn Google Analytics off; it's not used.
+2. **Build → Firestore Database → Create database.**
+   - **Start in production mode.** This is what makes the deploy-first ordering
+     safe — production mode denies everything until you publish your own rules.
+   - Pick the region closest to you. This cannot be changed later.
+3. **Build → Authentication → Get started → Google → Enable.** Set yourself as
    the support email. Save.
-4. **Project settings** (the gear, top left) → scroll to **Your apps** → click
-   the web icon `</>`. Register the app with any nickname. Do **not** check
-   "Firebase Hosting" — we're deploying to GitHub Pages.
-5. You'll be shown a `firebaseConfig` object. Keep that tab open for step 4.
+4. **Project settings** (gear icon) **→ Your apps →** the web icon `</>`.
+   Register with any nickname. Do **not** check "Firebase Hosting" — this
+   deploys to GitHub Pages.
+5. You'll be shown a `firebaseConfig` block with six values. You need these in
+   step 4. On an iPad, screenshot it or leave the tab open — they're also always
+   available again from this same Project settings page.
 
----
+## 3. Get the code onto `main` (2 min)
 
-## 3. Create the GitHub repo (2 min)
+The code is on the branch `claude/album-ranker-app-32nqxq`. The deploy workflow
+only runs on `main`, so it needs merging.
 
-If you haven't already — this code is currently on the branch
-`claude/album-ranker-app-32nqxq` in `Tarik122/albumrankings`, so the repo likely
-exists. If so, skip ahead.
+On github.com in Safari: open the repo → **Pull requests → New pull request** →
+base `main`, compare `claude/album-ranker-app-32nqxq` → **Create** → **Merge**.
 
-Otherwise create it at <https://github.com/new>, public or private (Pages works
-either way on a paid plan; public is required on free).
+Or just ask me to do it and skip this step.
 
----
+## 4. Configure and deploy (5 min)
 
-## 4. Wire up local config (2 min)
+All on github.com.
 
-In the project directory:
-
-```bash
-cp .env.example .env.local
-```
-
-Fill in the Firebase values from the config object in step 2.5. Leave
-`VITE_OWNER_UID` and `VITE_SPOTIFY_CLIENT_ID` blank for now.
-
-Then:
-
-```bash
-npm install
-npm run dev
-```
-
-Open <http://127.0.0.1:5173/albumrankings/> — note **127.0.0.1**, not
-`localhost`. Spotify requires the loopback IP, so the dev server binds there to
-keep the redirect URI consistent.
-
-You should see the sign-in screen. Sign in with Google.
-
----
-
-## 5. Lock the database to your account (5 min) — **do this before adding real data**
-
-Right now anyone with a Google account could read and write your database. The
-app shows a banner saying so.
-
-1. In the running app, go to the **Settings** tab. Copy the **Firebase UID**
-   shown there.
-2. Paste it into `.env.local` as `VITE_OWNER_UID=...`
-3. Open `firestore.rules` and replace `OWNER_UID_HERE` with the same UID.
-4. Publish the rules. Either paste the file's contents into the Firebase console
-   (**Firestore Database → Rules → Publish**), or from the CLI:
-
-   ```bash
-   npx firebase-tools login
-   npx firebase-tools deploy --only firestore:rules --project <your-project-id>
-   ```
-
-5. Restart `npm run dev` so the new env var is picked up. The Settings tab
-   should now say the database is locked to your account.
-
-**Verify the lock actually works.** In the Firebase console, open
-**Firestore → Rules → Rules Playground**, simulate a `get` on
-`/databases/(default)/documents/albums/anything` while authenticated as some
-other UID, and confirm it's **denied**. If it's allowed, the rules didn't
-publish.
-
-The rules also make the comparison log append-only — `update` and `delete` are
-refused outright. That's deliberate: ratings are recomputed from that log, so a
-silently edited entry would rewrite history.
-
----
-
-## 6. Register the Spotify app (5 min)
-
-1. Go to <https://developer.spotify.com/dashboard> → **Create app**.
-2. Name and description: anything.
-3. **Redirect URIs** — add *both* of these, exactly:
-   - `http://127.0.0.1:5173/albumrankings/` (local development)
-   - `https://<your-github-username>.github.io/albumrankings/` (deployed)
-
-   These must match character for character, trailing slash included. Spotify
-   rejects `localhost` — it has to be the loopback IP. The Settings tab in the
-   app shows you the exact URI it will send, if you want to check.
-4. **Which API/SDKs are you planning to use?** → Web API.
-5. Save. Then **Settings → Basic Information** → copy the **Client ID** into
-   `.env.local` as `VITE_SPOTIFY_CLIENT_ID=...`
-6. **Settings → User Management** → add your own Spotify account (the email on
-   the account, and your display name). Under Developer Mode, an app can only be
-   used by accounts explicitly listed here — without this you'll get a 403.
-
-Restart `npm run dev`. The Library tab should now offer "Connect Spotify".
-
----
-
-## 7. Deploy to GitHub Pages (5 min)
-
-The workflow in `.github/workflows/deploy.yml` builds and publishes on every
-push to `main`.
-
-1. **Repo Settings → Pages → Build and deployment → Source: GitHub Actions.**
-2. **Repo Settings → Secrets and variables → Actions → Variables tab** → add
-   each of these as a **repository variable** (not a secret — they're public
-   values, and secrets aren't available to the build in the way we need):
+1. **Settings → Pages → Build and deployment → Source: GitHub Actions.**
+2. **Settings → Secrets and variables → Actions →** the **Variables** tab →
+   **New repository variable**, once for each:
 
    | Variable | Value |
    |---|---|
@@ -144,42 +77,144 @@ push to `main`.
    | `VITE_FIREBASE_STORAGE_BUCKET` | from step 2.5 |
    | `VITE_FIREBASE_MESSAGING_SENDER_ID` | from step 2.5 |
    | `VITE_FIREBASE_APP_ID` | from step 2.5 |
-   | `VITE_OWNER_UID` | from step 5.1 |
-   | `VITE_SPOTIFY_CLIENT_ID` | from step 6.5 |
 
-   Calling these public isn't a shortcut — the built bundle contains them, and
-   anyone can read it. The protection is the Firestore rule from step 5, which
-   is why that step comes first.
+   Leave `VITE_OWNER_UID` and `VITE_SPOTIFY_CLIENT_ID` for later — you don't
+   have those values yet.
 
-3. Push to `main`. Watch the run under the **Actions** tab.
-4. **Firebase console → Authentication → Settings → Authorized domains** → add
-   `<your-github-username>.github.io`. Google sign-in will fail on the deployed
-   site until you do.
+   These are **variables, not secrets**. That isn't a shortcut: the built
+   bundle contains them and anyone can read it. The protection is the Firestore
+   rule in step 6, which is why that step exists.
 
-Your app is at `https://<your-github-username>.github.io/albumrankings/`.
+3. **Actions** tab → the "Deploy to GitHub Pages" workflow → **Run workflow**.
+   (Merging in step 3 may have already started one.) Wait for green.
+4. **Firebase console → Authentication → Settings → Authorized domains → Add
+   domain** → `<your-github-username>.github.io`. Google sign-in fails on the
+   deployed site until this is done.
 
-### If you use a custom domain
+Your app is now at `https://<your-github-username>.github.io/albumrankings/`.
 
-Add a repository variable `VITE_BASE` with the value `/`, and update the Spotify
-redirect URI and Firebase authorized domain to match.
+## 5. Sign in and get your UID (2 min)
+
+Open the app on your iPad and tap **Sign in with Google**.
+
+> **If Safari blocks the sign-in window**, that's iOS blocking popups.
+> **Settings → Apps → Safari → Block Pop-ups → off**, then try again. The app
+> uses a popup rather than a redirect deliberately — Safari's tracking
+> prevention breaks Firebase's redirect flow when the app and the auth domain
+> are different origins, which they always are on GitHub Pages.
+
+Once in, expect a red error saying Firestore refused the request. **That is
+correct** — you haven't granted yourself access yet.
+
+Go to the **Settings** tab. Your **Firebase UID** is there. Tap **Copy UID**, or
+tap the UID itself to select it.
+
+## 6. Lock the database to your UID (5 min) — do this before adding any data
+
+Two places need the UID.
+
+**a. The Firestore rules.** Firebase console → **Firestore Database → Rules**.
+The editor works fine on an iPad. Find this line:
+
+```
+return request.auth != null && request.auth.uid == 'OWNER_UID_HERE';
+```
+
+Replace `OWNER_UID_HERE` with your UID, keeping the quotes. **Publish.**
+
+If the rules editor shows something other than the rules in this repo (a fresh
+project starts with a deny-all default), copy the full contents of
+`firestore.rules` from the repo on github.com and paste them in, then replace
+the UID.
+
+**b. The build.** github.com → **Settings → Secrets and variables → Actions →
+Variables → New repository variable** → `VITE_OWNER_UID` = your UID. Then
+**Actions → Deploy to GitHub Pages → Run workflow** to rebuild with it.
+
+When the deploy finishes, reload the app. The error should be gone and the
+Settings tab should say the database is locked to your account.
+
+**Verify the lock actually holds.** Firebase console → **Firestore → Rules →
+Rules Playground**. Simulate a `get` on
+`/databases/(default)/documents/albums/anything`, authenticated, with a UID of
+anything other than yours. It must come back **denied**. If it's allowed, the
+rules didn't publish.
+
+The rules also make the comparison log append-only — `update` and `delete` are
+refused outright. That's deliberate: ratings are recomputed from that log, so a
+silently edited entry would rewrite your history.
+
+## 7. Register the Spotify app (5 min)
+
+1. <https://developer.spotify.com/dashboard> → **Create app**.
+2. Name and description: anything.
+3. **Redirect URI** — add exactly:
+   `https://<your-github-username>.github.io/albumrankings/`
+
+   Character for character, trailing slash included. The app's **Settings** tab
+   prints the exact URI it will send, and that value selects in one tap — check
+   it against what you typed if you hit an `INVALID_CLIENT` error.
+4. **Which API/SDKs are you planning to use?** → Web API.
+5. Save, then **Settings → Basic Information** → copy the **Client ID**.
+6. github.com → repository variable `VITE_SPOTIFY_CLIENT_ID` = that Client ID.
+   Re-run the deploy workflow.
+7. Back in the Spotify dashboard: **Settings → User Management** → add your own
+   Spotify account (its email, and your display name). Under Developer Mode an
+   app only works for accounts listed here — without this you get a 403.
+
+Reload the app. The **Library** tab now offers **Connect Spotify**.
+
+## 8. Done
+
+Add a few albums (Library tab → search Spotify, or import your top albums), then
+go to **Compare**. The ranking starts moving from the first vote.
 
 ---
 
-## Troubleshooting
+# Part B — running it locally (optional)
 
-**"Missing or insufficient permissions"** — the rules didn't publish, or the UID
-in them doesn't match the account you're signed in as. Check both.
+Only if you want the app on a laptop as well. Skip entirely if you're on iPad.
+
+```bash
+npm install
+cp .env.example .env.local   # fill in the same values as the repo variables
+npm run dev
+```
+
+Open <http://127.0.0.1:5173/albumrankings/> — **127.0.0.1**, not `localhost`.
+Spotify rejects `localhost` as a redirect URI, so the dev server binds to the
+loopback IP to keep the two consistent.
+
+To use Spotify locally, add a second redirect URI in the Spotify dashboard:
+`http://127.0.0.1:5173/albumrankings/`
+
+Run the tests with `npm test`.
+
+---
+
+# Troubleshooting
+
+**"Missing or insufficient permissions"** — before step 6, this is expected.
+After step 6, it means the rules didn't publish or the UID in them doesn't match
+the account you're signed in as. Compare the Settings tab's UID against the
+rules, character for character.
+
+**Sign-in window blocked on iPad** — Settings → Apps → Safari → Block Pop-ups →
+off.
+
+**Google sign-in fails on the deployed site** — the domain isn't in Firebase's
+authorized domains (step 4.4).
 
 **Spotify 403** — your account isn't in the app's User Management list (step
-6.6), or it isn't Premium (step 1).
+7.7), or it isn't Premium (step 1).
 
-**`INVALID_CLIENT: Invalid redirect URI`** — the URI doesn't match what's
-registered, exactly. Check the Settings tab for the URI the app actually sends.
-Trailing slashes count. `localhost` is not `127.0.0.1`.
-
-**Google sign-in popup closes immediately on the deployed site** — the domain
-isn't in Firebase's authorized domains (step 7.4).
+**`INVALID_CLIENT: Invalid redirect URI`** — it doesn't match what's registered,
+exactly. Trailing slashes count. Check the app's Settings tab for the URI it
+actually sends.
 
 **Blank page after deploying** — `base` in `vite.config.ts` doesn't match the
 Pages path. It defaults to `/albumrankings/`; if your repo has a different name,
-set the `VITE_BASE` repository variable to `/<repo-name>/`.
+add a `VITE_BASE` repository variable set to `/<repo-name>/`.
+
+**Using a custom domain** — set repository variable `VITE_BASE` to `/`, and
+update both the Spotify redirect URI and the Firebase authorized domain.

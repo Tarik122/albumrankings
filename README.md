@@ -30,6 +30,10 @@ Forcing a preference you don't have is exactly the noise this avoids.
 See **[SETUP.md](./SETUP.md)** — Firebase, Spotify, and GitHub Pages, in order.
 About 30 minutes.
 
+**No computer needed.** Every step is a web dashboard and GitHub Actions does
+the build, so the whole thing can be set up from an iPad. Part A of SETUP.md is
+that path; Part B covers local development if you want it.
+
 ## Development
 
 ```bash

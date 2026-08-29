@@ -21,9 +21,53 @@ export function watchAuth(cb: (user: User | null) => void): () => void {
   return onAuthStateChanged(auth, cb)
 }
 
+/**
+ * Sign in with Google.
+ *
+ * Deliberately a popup rather than a redirect. `signInWithRedirect` needs to
+ * read a pending credential back from storage on the Firebase auth domain,
+ * which Safari's tracking prevention partitions away whenever the app is served
+ * from a different origin — which is exactly our case (github.io versus
+ * firebaseapp.com). Fixing that would need a reverse proxy, and a static host
+ * has nowhere to put one. The popup runs as a first-party context and works.
+ *
+ * The trade-off is that mobile Safari blocks popups unless they open directly
+ * from a tap, so the errors below are worth naming precisely — otherwise this
+ * fails on an iPad with nothing but "auth/popup-blocked" to go on.
+ */
 export async function signIn(): Promise<User> {
-  const credential = await signInWithPopup(auth, provider)
-  return credential.user
+  try {
+    const credential = await signInWithPopup(auth, provider)
+    return credential.user
+  } catch (e) {
+    throw new Error(explainSignInFailure(e))
+  }
+}
+
+function explainSignInFailure(e: unknown): string {
+  const code = typeof e === 'object' && e && 'code' in e ? String(e.code) : ''
+  switch (code) {
+    case 'auth/popup-blocked':
+    case 'auth/operation-not-supported-in-this-environment':
+      return (
+        'Your browser blocked the sign-in window. On iPad: Settings → Apps → ' +
+        'Safari → turn off “Block Pop-ups”, then try again. On desktop, allow ' +
+        'pop-ups for this site.'
+      )
+    case 'auth/popup-closed-by-user':
+    case 'auth/cancelled-popup-request':
+      return 'The sign-in window closed before it finished. Tap to try again.'
+    case 'auth/unauthorized-domain':
+      return (
+        `${window.location.hostname} is not in your Firebase project’s authorised ` +
+        'domains. Add it under Authentication → Settings → Authorized domains. ' +
+        'See SETUP.md.'
+      )
+    case 'auth/network-request-failed':
+      return 'Could not reach Firebase. Check your connection and try again.'
+    default:
+      return e instanceof Error ? e.message : String(e)
+  }
 }
 
 export function signOutOwner(): Promise<void> {
