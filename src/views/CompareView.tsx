@@ -11,6 +11,9 @@ interface Props {
   comparisons: Comparison[]
   ratings: RatingTable
   index: Map<string, Album>
+  /** When set, every pair involves this album until it is placed. */
+  focusAlbumId?: string | null
+  onEndFocus?: () => void
 }
 
 const REASON_LABEL: Record<PairReason, string> = {
@@ -18,13 +21,25 @@ const REASON_LABEL: Record<PairReason, string> = {
   informative: 'Most informative pair right now',
   wildcard: 'Wildcard',
   audit: 'Checking an old verdict',
+  focus: 'Placing this album',
 }
 
-export function CompareView({ albums, comparisons, ratings, index }: Props) {
+/** Comparisons a focused session runs before the album counts as placed. */
+const FOCUS_TARGET = 6
+
+export function CompareView({
+  albums,
+  comparisons,
+  ratings,
+  index,
+  focusAlbumId,
+  onEndFocus,
+}: Props) {
   const [pair, setPair] = useState<Pair | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sessionCount, setSessionCount] = useState(0)
+  const [focusDone, setFocusDone] = useState(0)
 
   // Locally recorded comparisons, so a pair cannot be offered again in the
   // moment between writing it and the Firestore snapshot coming back.
@@ -36,8 +51,19 @@ export function CompareView({ albums, comparisons, ratings, index }: Props) {
     const { albums: a, comparisons: c, ratings: r } = latest.current
     const seen = new Set(c.map((x) => x.id))
     const merged = [...c, ...pending.current.filter((x) => !seen.has(x.id))]
-    setPair(selectPair(a.map((x) => x.id), r, merged))
+    setPair(selectPair(a.map((x) => x.id), r, merged, undefined, { focusAlbumId: focusRef.current }))
   }, [])
+
+  // Read through a ref so changing focus does not rebuild nextPair, which would
+  // swap the pair out from under a vote in flight.
+  const focusRef = useRef(focusAlbumId)
+  focusRef.current = focusAlbumId
+
+  // Entering or leaving a focused session invalidates whatever pair is showing.
+  useEffect(() => {
+    setPair(null)
+    setFocusDone(0)
+  }, [focusAlbumId])
 
   useEffect(() => {
     if (!pair && albums.length >= 2) nextPair()
@@ -52,6 +78,9 @@ export function CompareView({ albums, comparisons, ratings, index }: Props) {
         const written = await recordComparison(pair.albumA, pair.albumB, winner)
         pending.current = [...pending.current.slice(-50), written]
         setSessionCount((n) => n + 1)
+        // A skip taught us nothing about the album, so it should not count
+        // towards finishing a placement run.
+        if (focusRef.current && winner !== 'skip') setFocusDone((n) => n + 1)
         setPair(null)
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
@@ -85,6 +114,37 @@ export function CompareView({ albums, comparisons, ratings, index }: Props) {
     return a && b ? winProbability(a, b) : null
   }, [pair, ratings])
 
+  const focusAlbum = focusAlbumId ? index.get(focusAlbumId) : undefined
+
+  if (focusAlbum && focusDone >= FOCUS_TARGET) {
+    const placed = ratings.get(focusAlbum.id)
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="rounded-2xl border border-accent-dim/40 bg-accent/10 p-6 text-center">
+          <p className="text-lg font-semibold text-white">“{focusAlbum.title}” is placed.</p>
+          <p className="mt-1 text-sm text-ink-300">
+            {placed
+              ? `Sitting at ${Math.round(placed.rating)} ± ${Math.round(placed.ratingDeviation)} after ${FOCUS_TARGET} comparisons.`
+              : null}{' '}
+            It will keep firming up as it comes back around in normal rotation.
+          </p>
+        </div>
+        <div className="flex justify-center gap-3">
+          <button
+            type="button"
+            onClick={onEndFocus}
+            className="rounded-xl bg-accent px-5 py-2.5 text-sm font-semibold text-ink-950"
+          >
+            Back to normal comparisons
+          </button>
+          <SecondaryButton onClick={() => setFocusDone(0)} disabled={false}>
+            Keep going on this one
+          </SecondaryButton>
+        </div>
+      </div>
+    )
+  }
+
   if (albums.length < 2) {
     return (
       <Empty>
@@ -107,15 +167,33 @@ export function CompareView({ albums, comparisons, ratings, index }: Props) {
           <h1 className="text-2xl font-semibold text-white">Which is better?</h1>
           <p className="mt-1 text-sm text-ink-500">
             {REASON_LABEL[pair.reason]}
-            {odds !== null && pair.reason !== 'placement'
+            {odds !== null && pair.reason !== 'placement' && pair.reason !== 'focus'
               ? ` · ${Math.round(Math.max(odds, 1 - odds) * 100)}% expected`
               : ''}
           </p>
         </div>
         <p className="text-sm text-ink-500">
-          {sessionCount} this session · {comparisons.length} in total
+          {focusAlbum
+            ? `${focusDone} of ${FOCUS_TARGET}`
+            : `${sessionCount} this session · ${comparisons.length} in total`}
         </p>
       </header>
+
+      {focusAlbum && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-accent-dim/40 bg-accent/10 px-4 py-2.5">
+          <p className="text-sm text-ink-300">
+            Placing <span className="font-medium text-white">{focusAlbum.title}</span> — every pair
+            below involves it.
+          </p>
+          <button
+            type="button"
+            onClick={onEndFocus}
+            className="text-xs text-ink-300 underline underline-offset-2 hover:text-white"
+          >
+            Stop and rank normally
+          </button>
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2">
         <ComparisonCard album={albumA} onPick={() => void submit(pair.albumA)} disabled={busy} shortcut="1" />

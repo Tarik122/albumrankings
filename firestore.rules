@@ -5,9 +5,12 @@ rules_version = '2';
 // The client bundle is public (GitHub Pages), so the Firebase config in it is
 // public too. That is fine and expected: all access control lives here.
 //
-// Note this checks a specific UID, not merely `request.auth != null` — anyone
-// can create a Google account and authenticate against this Firebase project,
-// so "is signed in" would be no protection at all.
+// Note isOwner() checks a specific UID, not merely `request.auth != null` —
+// anyone can create a Google account and authenticate against this Firebase
+// project, so "is signed in" would be no protection at all.
+//
+// Albums marked isPublic are world-readable by design, to serve the public
+// rankings page. Writes are owner-only throughout.
 //
 // Replace OWNER_UID_HERE with your UID, keeping the quotes, then publish these
 // rules in the Firebase console. See SETUP.md step 6.
@@ -19,10 +22,21 @@ service cloud.firestore {
     }
 
     match /albums/{albumId} {
-      allow read, write: if isOwner();
+      // The public rankings page reads albums without signing in. Only albums
+      // explicitly marked public are legible.
+      //
+      // Firestore evaluates this against the *query*, not against the results:
+      // a listing that does not constrain isPublic == true is rejected outright
+      // rather than silently filtered. So a private album — and its review — is
+      // genuinely unreachable, not merely hidden by the interface.
+      allow read: if isOwner() || resource.data.isPublic == true;
+
+      allow write: if isOwner();
     }
 
     match /comparisons/{comparisonId} {
+      // The log stays private. It is large, noisy, and would expose judgements
+      // about albums the owner chose not to publish.
       allow read: if isOwner();
 
       // The comparison log is append-only. Ratings are derived by replaying it,

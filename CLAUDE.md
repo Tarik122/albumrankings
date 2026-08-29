@@ -118,6 +118,40 @@ would record a claim about equality that was never made — exactly the noise th
 project exists to avoid. Skips also put the pair into a long matchmaking
 cooldown (`skipCooldown`, 200 comparisons).
 
+## Reviews and personal scores
+
+`review` (free text) and `personalScore` (0–10) live on the album document and
+are **never read by the rating engine**. The ranking stays a pure function of
+the comparison log; your own score is a second, independent opinion sitting
+beside it. Where the two disagree is the interesting part, so do not be tempted
+to feed the score in as a prior — that would put an arbitrary number back into
+a system built to avoid them, and would break replay reproducibility, since the
+seed would live outside the log.
+
+## The public page
+
+Signed-out visitors get `PublicView` at the same URL the owner uses. One link,
+no router, no dead end for anyone who follows it.
+
+Two things make this work:
+
+- **`isPublic` is real access control, not a UI flag.** The Firestore rule is
+  `allow read: if isOwner() || resource.data.isPublic == true`, and Firestore
+  evaluates that against the *query*, not the results — a listing that does not
+  constrain `isPublic == true` is rejected outright rather than quietly
+  filtered. `fetchPublicAlbums()` therefore queries with that exact `where`
+  clause. A private album and its review are genuinely unreachable.
+- **The public page reads the cached ratings on album documents**, because the
+  comparison log stays owner-only and cannot be replayed by a visitor. This is
+  the one consumer that depends on the cache being fresh; it is written back on
+  every owner visit, so the public page trails by at most one visit.
+
+`hasStoredVisibility` is a read-time marker (never written) that lets
+`backfillPublicFlag` find albums predating the field. `isPublic` defaults to
+true on read, so without the marker those albums would be indistinguishable from
+genuinely public ones — but the rule matches the *stored* value, so they must be
+written to actually appear.
+
 ## Matchmaking
 
 `src/rating/matchmaking.ts`. Priorities, in order:
@@ -141,6 +175,19 @@ Two things worth preserving:
   estimate firms up, the same rule automatically narrows onto near neighbours.
   There is no separate binary-search ladder, and there does not need to be.
 
+  The aim is applied by **scoring candidates against the aimed-at rating**, not
+  merely by centring the candidate window on it. Centring alone was a real bug:
+  when the library is smaller than `candidateWindow` (60) the window covers
+  everything, so the aim had no effect at all — precisely when a library is
+  young and placement matters most. `matchmaking.test.ts` measures the mean
+  opponent distance at RD 350 against RD 40 to keep this honest.
+
+`selectPair` also accepts `focusAlbumId`, which restricts every pair to one
+album. That is what powers "rate this album now" after an import: the opponent
+still comes from the normal second-slot logic, so placement behaves identically,
+just concentrated. Wildcards and audits are skipped in a focused run — spending
+one of six comparisons on an unrelated pair would defeat the point.
+
 Selection is **O(albums) per call, not O(albums²)**: one side by lottery, then
 only a windowed slice of candidates scored for the other. Keep it that way — the
 library is meant to grow indefinitely.
@@ -149,7 +196,11 @@ library is meant to grow indefinitely.
 
 `albums/{autoId}` — `title`, `artist`, `spotifyAlbumId` (nullable), `artUrl`,
 `releaseYear`, `addedAt`, `source`, `dedupKey`, `rating`, `ratingDeviation`,
-`volatility`, `comparisonCount`.
+`volatility`, `comparisonCount`, `review`, `personalScore`, `reviewUpdatedAt`,
+`isPublic`.
+
+Fields added after the first release are filled in by `normaliseAlbum()` on
+read, so an older document without them is not a special case anywhere else.
 
 `comparisons/{autoId}` — `albumA`, `albumB`, `winner` (an album id, or `'tie'`,
 or `'skip'`), `comparedAt`.
@@ -183,9 +234,18 @@ Scopes: `user-top-read`, `user-read-recently-played`.
 These are not oversights — do not "fix" them by reaching for the endpoints
 below:
 
+- **`/me/albums` (saved albums) is the best source and has no cap.** It pages
+  through the whole saved library and reflects an explicit choice rather than
+  something inferred from track plays. Needs the `user-library-read` scope,
+  which was added after the first release — `hasScope()` detects a connection
+  predating it so the UI can ask for a reconnect instead of failing with a 403.
 - **There is no "top albums" endpoint.** Top albums are approximated from
   `/me/top/tracks` across all three time ranges, rolled up to parent albums,
-  weighted by track rank. Singles and sub-3-track releases are filtered out.
+  weighted by track rank. `limit` caps at 50 but `offset` reaches 49, so two
+  requests per range get ~99 tracks.
+- **Filter releases on `total_tracks`, never on `album_type`.** Spotify labels a
+  great many EPs — five, six, eight tracks — as `"single"`. Filtering on that
+  field silently drops real releases; this was a live bug.
 - **`/me/player/recently-played` caps at 50 items** with no deeper history. The
   suggestion feed is a rolling window, not a full play log.
 - **Album search `limit` maxes at 10**, not 50. The search UX is built for
@@ -239,7 +299,7 @@ ever changes, the ordering has to change with it.
 
 ## Testing
 
-`npm test` — 33 tests.
+`npm test` — 37 tests.
 
 The one to protect: `engine.test.ts` builds eight albums with a known intended
 order, generates consistent comparisons, then splices in a deliberately wrong
@@ -248,6 +308,11 @@ is the noise-resistance claim, checked rather than asserted.
 
 `CompareView.test.tsx` covers the comparison UI with Firestore stubbed —
 keyboard voting, tie-vs-skip, pair advancement, and the write-failure path.
+
+**Every statistical assertion in `matchmaking.test.ts` uses a seeded RNG.** They
+measure proportions — how often a newcomer comes up, how close the offered pairs
+are — and on `Math.random` they fail a run every so often for no reason. If you
+add one, seed it.
 
 ## Deliberately out of scope
 

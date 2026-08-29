@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { User } from 'firebase/auth'
-import { listenAlbums, persistRatings } from '../data/albums'
+import { backfillPublicFlag, listenAlbums, persistRatings } from '../data/albums'
 import { listenComparisons } from '../data/comparisons'
 import type { Album, Comparison } from '../data/types'
 import { DEFAULT_ENGINE_CONFIG, computeRatings, type RatingTable } from '../rating/engine'
@@ -74,7 +74,7 @@ export function useLibrary(user: User | null): LibraryState {
   useEffect(() => {
     if (!allowed || !loaded.albums || !loaded.comparisons || syncing.current) return
     syncing.current = true
-    persistRatings(albums, ratings)
+    Promise.all([persistRatings(albums, ratings), backfillPublicFlag(albums)])
       .catch(() => undefined)
       .finally(() => {
         syncing.current = false

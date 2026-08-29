@@ -35,6 +35,25 @@ function cyclingRng(values: number[]): () => number {
   return () => values[i++ % values.length]
 }
 
+/**
+ * Seeded RNG.
+ *
+ * Every assertion below about *proportions* — how often a newcomer comes up,
+ * how close the offered pairs are — is statistical, and left on Math.random it
+ * would fail a run every so often for no reason. Seeding makes them ordinary
+ * deterministic tests that still measure the real behaviour.
+ */
+function seeded(seed: number): () => number {
+  let a = seed
+  return () => {
+    a |= 0
+    a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
 describe('pair selection', () => {
   it('returns nothing when there is nothing to compare', () => {
     expect(selectPair([], new Map(), [])).toBeNull()
@@ -44,8 +63,9 @@ describe('pair selection', () => {
 
   it('never pairs an album with itself', () => {
     const { ids, ratings } = settledLibrary()
+    const rng = seeded(11)
     for (let i = 0; i < 500; i += 1) {
-      const pair = selectPair(ids, ratings, [])!
+      const pair = selectPair(ids, ratings, [], DEFAULT_MATCHMAKING, { rng })!
       expect(pair.albumA).not.toBe(pair.albumB)
     }
   })
@@ -55,9 +75,10 @@ describe('pair selection', () => {
     ratings.set('newcomer', entry(1500, 350, 0))
     const all = [...ids, 'newcomer']
 
+    const rng = seeded(22)
     let involved = 0
     for (let i = 0; i < 400; i += 1) {
-      const pair = selectPair(all, ratings, [])!
+      const pair = selectPair(all, ratings, [], DEFAULT_MATCHMAKING, { rng })!
       if (pair.albumA === 'newcomer' || pair.albumB === 'newcomer') involved += 1
     }
 
@@ -70,9 +91,10 @@ describe('pair selection', () => {
     const { ids, ratings } = settledLibrary()
     ratings.set('newcomer', entry(1500, 350, 0))
 
+    const rng = seeded(33)
     const opponents = new Set<string>()
     for (let i = 0; i < 300; i += 1) {
-      const pair = selectPair([...ids, 'newcomer'], ratings, [])!
+      const pair = selectPair([...ids, 'newcomer'], ratings, [], DEFAULT_MATCHMAKING, { rng })!
       if (pair.albumA === 'newcomer') opponents.add(pair.albumB)
       else if (pair.albumB === 'newcomer') opponents.add(pair.albumA)
     }
@@ -87,10 +109,11 @@ describe('pair selection', () => {
     // Suppress wildcards so we are measuring the scored path only.
     const config = { ...DEFAULT_MATCHMAKING, wildcardRate: 0 }
 
+    const rng = seeded(44)
     let closeEnough = 0
     const trials = 300
     for (let i = 0; i < trials; i += 1) {
-      const pair = selectPair(ids, ratings, [], config)!
+      const pair = selectPair(ids, ratings, [], config, { rng })!
       const gap = Math.abs(ratings.get(pair.albumA)!.rating - ratings.get(pair.albumB)!.rating)
       if (gap <= 200) closeEnough += 1
     }
@@ -108,8 +131,9 @@ describe('pair selection', () => {
     const blocked = new Set(recent.map((c) => pairKey(c.albumA, c.albumB)))
     const config = { ...DEFAULT_MATCHMAKING, wildcardRate: 0 }
 
+    const rng = seeded(55)
     for (let i = 0; i < 500; i += 1) {
-      const pair = selectPair(ids, ratings, recent, config)!
+      const pair = selectPair(ids, ratings, recent, config, { rng })!
       expect(blocked.has(pairKey(pair.albumA, pair.albumB))).toBe(false)
     }
   })
@@ -125,8 +149,9 @@ describe('pair selection', () => {
     }
     const config = { ...DEFAULT_MATCHMAKING, wildcardRate: 0 }
 
+    const rng = seeded(66)
     for (let i = 0; i < 400; i += 1) {
-      const pair = selectPair(ids, ratings, log, config)!
+      const pair = selectPair(ids, ratings, log, config, { rng })!
       expect(pairKey(pair.albumA, pair.albumB)).not.toBe(pairKey('alb0', 'alb1'))
     }
   })
@@ -139,18 +164,98 @@ describe('pair selection', () => {
     ]
     // First value triggers the wildcard branch, second selects the audit path,
     // third picks the entry from the older half of the log.
-    const pair = selectPair(ids, ratings, log, DEFAULT_MATCHMAKING, cyclingRng([0.01, 0.1, 0]))!
+    const pair = selectPair(ids, ratings, log, DEFAULT_MATCHMAKING, { rng: cyclingRng([0.01, 0.1, 0]) })!
 
     expect(pair.reason).toBe('audit')
     expect(pairKey(pair.albumA, pair.albumB)).toBe(pairKey('alb3', 'alb30'))
   })
 
+  it('keeps every focused pair on the focused album', () => {
+    const { ids, ratings } = settledLibrary()
+    ratings.set('newcomer', entry(1500, 350, 0))
+    const all = [...ids, 'newcomer']
+
+    const rng = seeded(88)
+    for (let i = 0; i < 300; i += 1) {
+      const pair = selectPair(all, ratings, [], DEFAULT_MATCHMAKING, {
+        focusAlbumId: 'newcomer',
+        rng,
+      })!
+      expect(pair.reason).toBe('focus')
+      expect(pair.albumA).toBe('newcomer')
+      expect(pair.albumB).not.toBe('newcomer')
+    }
+  })
+
+  it('spreads a focused newcomer across the library, then narrows as it settles', () => {
+    // A 150-album library spanning 1000–2490, deliberately larger than the
+    // 60-album candidate window: below that size the window covers everything
+    // and there is nothing for the aim to do.
+    const ratings: RatingTable = new Map()
+    const ids: string[] = []
+    for (let i = 0; i < 150; i += 1) {
+      const id = `alb${i}`
+      ids.push(id)
+      ratings.set(id, entry(1000 + i * 10, 60, 30))
+    }
+
+    // Measured as how far the opponents sit from the newcomer, not how many
+    // distinct ones appear — the count saturates and hides the effect.
+    const meanGapAt = (rd: number) => {
+      const rng = seeded(99)
+      ratings.set('newcomer', entry(1750, rd, rd > 200 ? 0 : 30))
+      let total = 0
+      const trials = 400
+      for (let i = 0; i < trials; i += 1) {
+        const pair = selectPair([...ids, 'newcomer'], ratings, [], DEFAULT_MATCHMAKING, {
+          focusAlbumId: 'newcomer',
+          rng,
+        })!
+        total += Math.abs(ratings.get(pair.albumB)!.rating - 1750)
+      }
+      return total / trials
+    }
+
+    // The spread comes from RD alone: while the album is unknown its opponents
+    // range across the library, and the same rule narrows onto near neighbours
+    // once the estimate firms up. No separate placement ladder does this.
+    expect(meanGapAt(350)).toBeGreaterThan(meanGapAt(40) * 1.5)
+  })
+
+  it('still returns a focused pair when everything nearby is in cooldown', () => {
+    const { ids, ratings } = settledLibrary()
+    ratings.set('newcomer', entry(1500, 60, 30))
+
+    // Every possible partner already compared against, very recently.
+    const log: Comparison[] = ids.map((id, i) => ({
+      id: `c${i}`,
+      albumA: 'newcomer',
+      albumB: id,
+      winner: 'newcomer',
+      comparedAt: i + 1,
+    }))
+
+    const pair = selectPair([...ids, 'newcomer'], ratings, log, DEFAULT_MATCHMAKING, {
+      focusAlbumId: 'newcomer',
+    })
+    expect(pair).not.toBeNull()
+    expect(pair!.albumA).toBe('newcomer')
+  })
+
+  it('returns nothing when the focused album is not in the library', () => {
+    const { ids, ratings } = settledLibrary()
+    expect(
+      selectPair(ids, ratings, [], DEFAULT_MATCHMAKING, { focusAlbumId: 'ghost' }),
+    ).toBeNull()
+  })
+
   it('produces wildcards at roughly the configured rate', () => {
     const { ids, ratings } = settledLibrary()
+    const rng = seeded(77)
     let wild = 0
     const trials = 3000
     for (let i = 0; i < trials; i += 1) {
-      const pair = selectPair(ids, ratings, [], DEFAULT_MATCHMAKING)!
+      const pair = selectPair(ids, ratings, [], DEFAULT_MATCHMAKING, { rng })!
       if (pair.reason === 'wildcard' || pair.reason === 'audit') wild += 1
     }
     // No prior comparisons, so the audit path finds nothing and falls through

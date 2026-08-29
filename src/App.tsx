@@ -4,9 +4,11 @@ import { Tabs, type TabId } from './components/Tabs'
 import { isOwner, ownerConfigured, signIn, watchAuth } from './data/auth'
 import { useAlbumIndex, useAsyncAction, useLibrary } from './state/store'
 import { completeAuthIfRedirected } from './spotify/auth'
+import { AlbumDetail } from './views/AlbumDetail'
 import { CompareView } from './views/CompareView'
 import { LeaderboardView } from './views/LeaderboardView'
 import { LibraryView } from './views/LibraryView'
+import { PublicView } from './views/PublicView'
 import { SettingsView } from './views/SettingsView'
 
 export default function App() {
@@ -14,6 +16,9 @@ export default function App() {
   const [authReady, setAuthReady] = useState(false)
   const [tab, setTab] = useState<TabId>('compare')
   const [spotifyError, setSpotifyError] = useState<string | null>(null)
+  const [openAlbumId, setOpenAlbumId] = useState<string | null>(null)
+  const [focusAlbumId, setFocusAlbumId] = useState<string | null>(null)
+  const [wantsSignIn, setWantsSignIn] = useState(false)
 
   useEffect(
     () =>
@@ -38,8 +43,24 @@ export default function App() {
   const index = useAlbumIndex(library.albums)
 
   if (!authReady) return <Centered>Loading…</Centered>
-  if (!user) return <SignIn />
+  // Signed-out visitors get the public rankings at the same URL, so there is
+  // one link to share and no dead end for anyone who follows it.
+  if (!user) {
+    return wantsSignIn ? (
+      <SignIn onBack={() => setWantsSignIn(false)} />
+    ) : (
+      <PublicView onSignIn={() => setWantsSignIn(true)} />
+    )
+  }
   if (!isOwner(user)) return <NotOwner email={user.email} />
+
+  const openAlbum = openAlbumId ? index.get(openAlbumId) : undefined
+
+  const placeNow = (albumId: string) => {
+    setOpenAlbumId(null)
+    setFocusAlbumId(albumId)
+    setTab('compare')
+  }
 
   return (
     <div className="mx-auto flex min-h-full max-w-4xl flex-col gap-6 px-4 py-6 sm:px-6">
@@ -79,24 +100,38 @@ export default function App() {
             comparisons={library.comparisons}
             ratings={library.ratings}
             index={index}
+            focusAlbumId={focusAlbumId}
+            onEndFocus={() => setFocusAlbumId(null)}
           />
         ) : tab === 'leaderboard' ? (
           <LeaderboardView
             albums={library.albums}
             comparisons={library.comparisons}
             ratings={library.ratings}
+            onOpenAlbum={setOpenAlbumId}
           />
         ) : tab === 'library' ? (
-          <LibraryView albums={library.albums} />
+          <LibraryView albums={library.albums} onOpenAlbum={setOpenAlbumId} onPlaceNow={placeNow} />
         ) : (
           <SettingsView user={user} albums={library.albums} comparisons={library.comparisons} />
         )}
       </main>
+
+      {openAlbum && (
+        <AlbumDetail
+          album={openAlbum}
+          ratings={library.ratings}
+          comparisons={library.comparisons}
+          index={index}
+          onClose={() => setOpenAlbumId(null)}
+          onPlaceNow={placeNow}
+        />
+      )}
     </div>
   )
 }
 
-function SignIn() {
+function SignIn({ onBack }: { onBack: () => void }) {
   const [busy, error, run] = useAsyncAction()
   return (
     <Centered>
@@ -114,6 +149,13 @@ function SignIn() {
         Sign in with Google
       </button>
       {error && <p className="mt-4 max-w-sm text-sm text-red-400">{error}</p>}
+      <button
+        type="button"
+        onClick={onBack}
+        className="mt-4 text-sm text-ink-700 underline underline-offset-2 hover:text-ink-300"
+      >
+        Back to the rankings
+      </button>
     </Centered>
   )
 }

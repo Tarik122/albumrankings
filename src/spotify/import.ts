@@ -49,6 +49,11 @@ interface Paged<T> {
   total: number
 }
 
+interface RecentlyPlayed {
+  items: { track: SpotifyTrack; played_at: string }[]
+  cursors?: { before?: string; after?: string }
+}
+
 /** An album inferred from listening data, with the evidence that surfaced it. */
 export interface AlbumSuggestion extends NewAlbum {
   spotifyAlbumId: string
@@ -72,14 +77,19 @@ export async function fetchTopAlbums(ranges: TimeRange[] = [...TIME_RANGES]): Pr
   const tally = new Map<string, AlbumSuggestion>()
 
   for (const range of ranges) {
-    const page = await spotifyGet<Paged<SpotifyTrack>>(
-      `/me/top/tracks?time_range=${range}&limit=50`,
-    )
-    page.items.forEach((track, index) => {
-      // 1.0 for the top track down to ~0.5 for the 50th.
-      const weight = 1 / (1 + index / 50)
-      accumulate(tally, track, 'spotify-top', weight)
-    })
+    // The endpoint caps `limit` at 50 but accepts an offset up to 49, so two
+    // requests reach ~99 tracks — roughly double what one page gives.
+    for (const offset of [0, 49]) {
+      const page = await spotifyGet<Paged<SpotifyTrack>>(
+        `/me/top/tracks?time_range=${range}&limit=50&offset=${offset}`,
+      )
+      page.items.forEach((track, index) => {
+        const rank = offset + index
+        // 1.0 for the top track, decaying with position.
+        accumulate(tally, track, 'spotify-top', 1 / (1 + rank / 50))
+      })
+      if (page.items.length < 50) break
+    }
   }
 
   return rank(tally)
@@ -91,14 +101,57 @@ export async function fetchTopAlbums(ranges: TimeRange[] = [...TIME_RANGES]): Pr
  * check in regularly if you want to catch everything.
  */
 export async function fetchRecentAlbums(): Promise<AlbumSuggestion[]> {
-  const page = await spotifyGet<Paged<{ track: SpotifyTrack; played_at: string }>>(
-    '/me/player/recently-played?limit=50',
-  )
   const tally = new Map<string, AlbumSuggestion>()
-  for (const play of page.items) {
-    accumulate(tally, play.track, 'spotify-recent', 1)
+  let before: string | undefined
+
+  // Spotify returns at most 50 plays per request and generally retains only
+  // about that much history, but the `before` cursor sometimes reaches a little
+  // further back. Walk it until it stops yielding, with a hard stop so a
+  // misbehaving cursor cannot loop.
+  for (let page = 0; page < 5; page += 1) {
+    const query = before ? `&before=${before}` : ''
+    const res = await spotifyGet<RecentlyPlayed>(`/me/player/recently-played?limit=50${query}`)
+    if (!res.items?.length) break
+    for (const play of res.items) accumulate(tally, play.track, 'spotify-recent', 1)
+    const next = res.cursors?.before
+    if (!next || next === before) break
+    before = next
   }
+
   return rank(tally)
+}
+
+/**
+ * Every album you have saved to your library, paged in full.
+ *
+ * This is the best single source of "albums I actually care about" — it is an
+ * explicit choice you made, rather than something inferred from track plays —
+ * and unlike the listening endpoints it has no history cap.
+ */
+export async function fetchSavedAlbums(): Promise<AlbumSuggestion[]> {
+  const out: AlbumSuggestion[] = []
+
+  for (let offset = 0; offset < 2000; offset += 50) {
+    const page = await spotifyGet<Paged<{ album: SpotifySimplifiedAlbum; added_at: string }>>(
+      `/me/albums?limit=50&offset=${offset}`,
+    )
+    if (!page.items?.length) break
+    for (const { album } of page.items) {
+      if (!isRankableRelease(album)) continue
+      out.push({
+        ...toNewAlbum(album, 'spotify-saved'),
+        spotifyAlbumId: album.id,
+        trackCount: album.total_tracks,
+        // Saved albums have no ranking signal of their own; keep library order,
+        // which is most-recently-saved first.
+        score: 0,
+        tracks: [],
+      })
+    }
+    if (page.items.length < 50) break
+  }
+
+  return out
 }
 
 /**
@@ -139,9 +192,7 @@ function accumulate(
 ): void {
   const album = track.album
   if (!album?.id) return
-  // Singles and one-track releases are not albums for ranking purposes; they
-  // would flood the library with entries that are really just songs.
-  if (album.album_type === 'single' || album.total_tracks < 3) return
+  if (!isRankableRelease(album)) return
 
   const existing = tally.get(album.id)
   if (existing) {
@@ -161,6 +212,21 @@ function accumulate(
     tracks: [track.name],
   })
 }
+
+/**
+ * Whether a release is an album for ranking purposes.
+ *
+ * Track count alone, deliberately. Spotify's `album_type` is not a reliable
+ * guide here: it labels a great many EPs — five, six, eight tracks — as
+ * "single", so filtering on that field silently drops real releases you would
+ * want to rank.
+ */
+function isRankableRelease(album: SpotifySimplifiedAlbum): boolean {
+  return (album.total_tracks ?? 0) >= MIN_TRACKS
+}
+
+/** Below this a release is a song or a two-track single, not an album. */
+const MIN_TRACKS = 3
 
 function rank(tally: Map<string, AlbumSuggestion>): AlbumSuggestion[] {
   return [...tally.values()].sort((a, b) => b.score - a.score || b.trackCount - a.trackCount)

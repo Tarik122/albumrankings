@@ -22,16 +22,44 @@ interface StoredTokens {
   refreshToken: string
   /** Epoch ms. */
   expiresAt: number
+  /** Scopes Spotify actually granted, which may lag the scopes we now ask for. */
+  scopes: string[]
 }
 
 interface TokenResponse {
   access_token: string
   refresh_token?: string
   expires_in: number
+  scope?: string
 }
 
 export function isConnected(): boolean {
   return readTokens() !== null
+}
+
+/**
+ * Whether the current connection covers a scope.
+ *
+ * Scopes are granted at authorisation time, so adding one to the app does not
+ * retroactively grant it to an existing connection — that needs a fresh consent
+ * round-trip. Checking up front lets the UI say "reconnect to enable this"
+ * instead of letting the call fail with an opaque 403.
+ */
+export function hasScope(scope: string): boolean {
+  const tokens = readTokens()
+  if (!tokens) return false
+  // A connection made before we recorded scopes has none stored. Assume the
+  // scopes of that era rather than nagging for a reconnect that isn't needed.
+  if (tokens.scopes.length === 0) {
+    return scope === 'user-top-read' || scope === 'user-read-recently-played'
+  }
+  return tokens.scopes.includes(scope)
+}
+
+/** Scopes the app asks for but this connection does not have. */
+export function missingScopes(): string[] {
+  if (!isConnected()) return []
+  return spotifyScopes.filter((scope) => !hasScope(scope))
 }
 
 export function disconnect(): void {
@@ -136,7 +164,7 @@ async function refresh(tokens: StoredTokens): Promise<string> {
     disconnect()
     throw e
   }
-  storeTokens(refreshed, tokens.refreshToken)
+  storeTokens(refreshed, tokens)
   return refreshed.access_token
 }
 
@@ -153,13 +181,19 @@ async function exchange(body: Record<string, string>): Promise<TokenResponse> {
   return res.json() as Promise<TokenResponse>
 }
 
-function storeTokens(response: TokenResponse, previousRefresh: string | null): void {
-  const refreshToken = response.refresh_token ?? previousRefresh
+function storeTokens(
+  response: TokenResponse,
+  previous: Pick<StoredTokens, 'refreshToken' | 'scopes'> | null,
+): void {
+  const refreshToken = response.refresh_token ?? previous?.refreshToken
   if (!refreshToken) throw new Error('Spotify returned no refresh token.')
   const tokens: StoredTokens = {
     accessToken: response.access_token,
     refreshToken,
     expiresAt: Date.now() + response.expires_in * 1000,
+    // A refresh response usually echoes the granted scopes; when it doesn't,
+    // keep what we already knew rather than forgetting them.
+    scopes: response.scope ? response.scope.split(' ').filter(Boolean) : (previous?.scopes ?? []),
   }
   localStorage.setItem(TOKEN_KEY, JSON.stringify(tokens))
 }
@@ -169,7 +203,8 @@ function readTokens(): StoredTokens | null {
   if (!raw) return null
   try {
     const parsed = JSON.parse(raw) as StoredTokens
-    return parsed.accessToken && parsed.refreshToken ? parsed : null
+    if (!parsed.accessToken || !parsed.refreshToken) return null
+    return { ...parsed, scopes: Array.isArray(parsed.scopes) ? parsed.scopes : [] }
   } catch {
     return null
   }

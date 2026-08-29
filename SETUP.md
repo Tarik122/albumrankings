@@ -213,6 +213,31 @@ Run the tests with `npm test`.
 
 ---
 
+# Upgrading an already-running instance
+
+Two of these steps need doing by hand when you deploy a version that adds the
+public page or the saved-albums import. Skipping either is not dangerous, it
+just means the feature does nothing.
+
+**1. Re-publish the Firestore rules.** The public page needs anyone to be able
+to read albums marked public. Copy `firestore.rules` from the repo again — it
+now grants `allow read` when `isPublic == true` — put your UID back in, and
+publish. Writes stay owner-only.
+
+Check it: **Rules Playground**, an *unauthenticated* `get` on
+`/databases/(default)/documents/albums/<some id>`. It should be **allowed** for
+an album you have marked public, and **denied** for one you have unticked.
+
+**2. Reconnect Spotify.** Reading your saved albums needs the
+`user-library-read` scope, which your existing connection was never granted —
+scopes are fixed at authorisation time and adding one to the app does not
+retroactively grant it. The Saved albums panel detects this and offers a
+Reconnect button. Nothing else changes.
+
+Albums you added before this version become public automatically the first time
+you open the app signed in; untick "Show on the public page" on any you would
+rather keep to yourself.
+
 # Troubleshooting
 
 **"Missing or insufficient permissions"** — before step 6, this is expected.
@@ -232,6 +257,13 @@ authorized domains (step 4.4).
 **`INVALID_CLIENT: Invalid redirect URI`** — it doesn't match what's registered,
 exactly. Trailing slashes count. Check the app's Settings tab for the URI it
 actually sends.
+
+**Public page is empty when signed out** — either the rules were not
+re-published (see Upgrading above), or every album is unticked. Signed in, the
+Library and Leaderboard mark private albums as such.
+
+**Saved albums says it needs reconnecting** — expected once, after upgrading.
+Tap Reconnect Spotify; it re-runs consent with the extra scope.
 
 **Blank page after deploying** — `base` in `vite.config.ts` doesn't match the
 Pages path. It defaults to `/albumrankings/`; if your repo has a different name,

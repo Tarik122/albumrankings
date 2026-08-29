@@ -21,7 +21,7 @@ import type { AlbumRating, RatingTable } from './engine'
 import type { Comparison } from '../data/types'
 import { outcomeOf } from '../data/types'
 
-export type PairReason = 'placement' | 'informative' | 'wildcard' | 'audit'
+export type PairReason = 'placement' | 'informative' | 'wildcard' | 'audit' | 'focus'
 
 export interface Pair {
   albumA: string
@@ -60,13 +60,27 @@ interface Candidate {
   r: AlbumRating
 }
 
+export interface SelectOptions {
+  rng?: Rng
+  /**
+   * Restrict every pair to one album.
+   *
+   * Used to place a newly added album on its own, without working through the
+   * rest of the library. The opponent still comes from the normal second-slot
+   * logic, so a fresh album's opponents spread across the whole rating range
+   * and then converge — placement behaviour is identical, just concentrated.
+   */
+  focusAlbumId?: string | null
+}
+
 export function selectPair(
   albumIds: string[],
   ratings: RatingTable,
   comparisons: Comparison[],
   config: MatchmakingConfig = DEFAULT_MATCHMAKING,
-  rng: Rng = Math.random,
+  options: SelectOptions = {},
 ): Pair | null {
+  const rng = options.rng ?? Math.random
   const pool: Candidate[] = []
   for (const id of albumIds) {
     const r = ratings.get(id)
@@ -75,6 +89,10 @@ export function selectPair(
   if (pool.length < 2) return null
 
   const blocked = blockedPairs(comparisons, config)
+
+  if (options.focusAlbumId) {
+    return focusPair(options.focusAlbumId, pool, blocked, config, rng)
+  }
 
   if (rng() < config.wildcardRate) {
     const wild =
@@ -95,6 +113,34 @@ export function selectPair(
 
   const beingPlaced = a.r.comparisonCount < config.placementTarget
   return { albumA: a.id, albumB: b.id, reason: beingPlaced ? 'placement' : 'informative' }
+}
+
+/**
+ * Every pair involves one specific album.
+ *
+ * No wildcards and no audits here: the entire point of a focused session is
+ * that each answer tells you something about this album, so spending one on an
+ * unrelated pair would defeat it.
+ */
+function focusPair(
+  focusId: string,
+  pool: Candidate[],
+  blocked: Set<string>,
+  config: MatchmakingConfig,
+  rng: Rng,
+): Pair | null {
+  const focus = pool.find((c) => c.id === focusId)
+  if (!focus || pool.length < 2) return null
+
+  const sorted = [...pool].sort((x, y) => x.r.rating - y.r.rating)
+  const opponent =
+    pickSecond(focus, sorted, blocked, config, rng) ??
+    // Everything nearby is in cooldown; ignore it rather than stalling the
+    // session, since a focused run is short and deliberately repetitive.
+    pickSecond(focus, sorted, new Set(), config, rng)
+
+  if (!opponent) return null
+  return { albumA: focus.id, albumB: opponent.id, reason: 'focus' }
 }
 
 /**
@@ -151,12 +197,20 @@ function pickSecond(
   const lo = Math.max(0, centre - half)
   const hi = Math.min(sorted.length, centre + half + 1)
 
+  // Score against the aimed-at rating, not the album's own.
+  //
+  // For a settled album the two are the same. For one still being placed they
+  // are not, and the difference matters: aiming only the *window* would be
+  // inert whenever the library is smaller than the window, which is exactly
+  // when a library is young and placement matters most.
+  const aim: Rating = { ...a.r, rating: target }
+
   const scored: { c: Candidate; score: number }[] = []
   for (let i = lo; i < hi; i += 1) {
     const c = sorted[i]
     if (c.id === a.id) continue
     if (blocked.has(pairKey(a.id, c.id))) continue
-    scored.push({ c, score: pairScore(a.r, c.r) })
+    scored.push({ c, score: pairScore(aim, c.r) })
   }
   if (scored.length === 0) return null
 

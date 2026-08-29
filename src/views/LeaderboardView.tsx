@@ -8,6 +8,7 @@ interface Props {
   albums: Album[]
   comparisons: Comparison[]
   ratings: RatingTable
+  onOpenAlbum: (id: string) => void
 }
 
 type SortMode = 'conservative' | 'rating' | 'uncertain'
@@ -26,7 +27,7 @@ const SORTS: { id: SortMode; label: string; hint: string }[] = [
   },
 ]
 
-export function LeaderboardView({ albums, comparisons, ratings }: Props) {
+export function LeaderboardView({ albums, comparisons, ratings, onOpenAlbum }: Props) {
   const [sort, setSort] = useState<SortMode>('conservative')
 
   const rows = useMemo(() => {
@@ -94,24 +95,31 @@ export function LeaderboardView({ albums, comparisons, ratings }: Props) {
 
       <ol className="flex flex-col gap-1.5">
         {rows.map((row, position) => (
-          <li
-            key={row.album.id}
-            className="flex items-center gap-3 rounded-xl border border-ink-800 bg-ink-900 p-2.5"
-          >
-            <span className="w-8 shrink-0 text-right font-mono text-sm text-ink-700">
-              {position + 1}
-            </span>
-            <AlbumThumb album={row.album} />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-white">{row.album.title}</p>
-              <p className="truncate text-xs text-ink-500">{row.album.artist}</p>
-            </div>
-            <div className="shrink-0 text-right">
-              <p className="font-mono text-sm text-white">{Math.round(row.r.rating)}</p>
-              <p className="font-mono text-xs text-ink-700">
-                ±{Math.round(row.r.ratingDeviation)} · {row.r.comparisonCount}
-              </p>
-            </div>
+          <li key={row.album.id}>
+            <button
+              type="button"
+              onClick={() => onOpenAlbum(row.album.id)}
+              className="flex w-full items-center gap-3 rounded-xl border border-ink-800 bg-ink-900 p-2.5 text-left transition hover:border-ink-700"
+            >
+              <span className="w-8 shrink-0 text-right font-mono text-sm text-ink-700">
+                {position + 1}
+              </span>
+              <AlbumThumb album={row.album} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-white">{row.album.title}</p>
+                <p className="truncate text-xs text-ink-500">
+                  {row.album.artist}
+                  {row.album.review.trim() ? ' · reviewed' : ''}
+                  {!row.album.isPublic ? ' · private' : ''}
+                </p>
+              </div>
+              <div className="shrink-0 text-right">
+                <p className="font-mono text-sm text-white">{Math.round(row.r.rating)}</p>
+                <p className="font-mono text-xs text-ink-700">
+                  ±{Math.round(row.r.ratingDeviation)} · {row.r.comparisonCount}
+                </p>
+              </div>
+            </button>
           </li>
         ))}
       </ol>

@@ -10,7 +10,13 @@ import {
   writeBatch,
 } from 'firebase/firestore'
 import { db } from './firebase'
-import { type Album, type AlbumSource, makeDedupKey } from './types'
+import {
+  NEW_ALBUM_DEFAULTS,
+  type Album,
+  type AlbumSource,
+  makeDedupKey,
+  normaliseAlbum,
+} from './types'
 import { DEFAULT_RATING, DEFAULT_RD, DEFAULT_VOLATILITY } from '../rating/glicko2'
 import type { RatingTable } from '../rating/engine'
 
@@ -32,7 +38,7 @@ export function listenAlbums(
   const q = query(collection(db, COLLECTION), orderBy('addedAt', 'desc'))
   return onSnapshot(
     q,
-    (snap) => onChange(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Album)),
+    (snap) => onChange(snap.docs.map((d) => normaliseAlbum(d.id, d.data()))),
     onError,
   )
 }
@@ -74,10 +80,11 @@ export async function addAlbum(input: NewAlbum, existing: Album[]): Promise<Albu
     ratingDeviation: DEFAULT_RD,
     volatility: DEFAULT_VOLATILITY,
     comparisonCount: 0,
+    ...NEW_ALBUM_DEFAULTS,
   }
 
   const ref = await addDoc(collection(db, COLLECTION), record)
-  return { id: ref.id, ...record }
+  return { id: ref.id, ...record, hasStoredVisibility: true }
 }
 
 /** Match on Spotify id first, then on the normalised artist + title key. */
@@ -134,4 +141,41 @@ export async function persistRatings(albums: Album[], ratings: RatingTable): Pro
   }
 
   return stale.length
+}
+
+/** What the album editor can change. Everything here is outside the rating maths. */
+export interface AlbumMeta {
+  review: string
+  personalScore: number | null
+  isPublic: boolean
+}
+
+export function updateAlbumMeta(id: string, meta: AlbumMeta): Promise<void> {
+  return updateDoc(doc(db, COLLECTION, id), {
+    review: meta.review,
+    personalScore: meta.personalScore,
+    isPublic: meta.isPublic,
+    reviewUpdatedAt: Date.now(),
+  })
+}
+
+/**
+ * Write `isPublic` onto albums created before the field existed.
+ *
+ * Unlike the other new fields this cannot be defaulted on read: the Firestore
+ * rules match on the *stored* value, so an album without the field is invisible
+ * to the public page no matter what the client thinks it is. Runs once; after
+ * the first pass there is nothing left to find.
+ */
+export async function backfillPublicFlag(albums: Album[]): Promise<number> {
+  const missing = albums.filter((a) => !a.hasStoredVisibility)
+  const CHUNK = 400
+  for (let i = 0; i < missing.length; i += CHUNK) {
+    const batch = writeBatch(db)
+    for (const album of missing.slice(i, i + CHUNK)) {
+      batch.update(doc(db, COLLECTION, album.id), { isPublic: true })
+    }
+    await batch.commit()
+  }
+  return missing.length
 }

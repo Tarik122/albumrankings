@@ -32,6 +32,11 @@ function album(id: string, title: string): Album {
     ratingDeviation: 350,
     volatility: 0.06,
     comparisonCount: 0,
+    review: '',
+    personalScore: null,
+    reviewUpdatedAt: null,
+    isPublic: true,
+    hasStoredVisibility: true,
   }
 }
 

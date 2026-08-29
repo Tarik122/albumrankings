@@ -43,4 +43,11 @@ export const spotifyRedirectUri: string = new URL(
   window.location.origin,
 ).toString()
 
-export const spotifyScopes = ['user-top-read', 'user-read-recently-played'] as const
+export const spotifyScopes = [
+  'user-top-read',
+  'user-read-recently-played',
+  // Saved albums. Added after the first release, so an existing connection has
+  // to be re-authorised before the saved-albums import will work — the app
+  // detects the missing scope and says so rather than failing with a bare 403.
+  'user-library-read',
+] as const

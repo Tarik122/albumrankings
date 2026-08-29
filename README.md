@@ -25,6 +25,19 @@ You can also say **"too close to call"** (a real tie, which pulls two ratings
 together) or **"skip"** (no opinion, recorded but excluded from the maths).
 Forcing a preference you don't have is exactly the noise this avoids.
 
+## What else it does
+
+- **Reviews and your own score** per album, stored alongside the Glicko rating
+  and deliberately never fed into it — two independent opinions, free to
+  disagree.
+- **A public rankings page** at the same URL, for anyone not signed in. Each
+  album has a "show publicly" switch, enforced by the database rules rather
+  than the interface.
+- **Place one album at a time.** Add something new and rate just that, against
+  a spread of what you already have, instead of working through the library.
+- **Spotify import** from your saved albums, your top tracks, or your recent
+  plays.
+
 ## Setup
 
 See **[SETUP.md](./SETUP.md)** — Firebase, Spotify, and GitHub Pages, in order.
@@ -40,7 +53,7 @@ that path; Part B covers local development if you want it.
 npm install
 cp .env.example .env.local   # fill in — see SETUP.md
 npm run dev                  # http://127.0.0.1:5173/albumrankings/
-npm test                     # 33 tests
+npm test                     # 37 tests
 npm run build
 ```
 
