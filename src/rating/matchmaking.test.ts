@@ -156,20 +156,6 @@ describe('pair selection', () => {
     }
   })
 
-  it('re-offers an already-judged pair when the audit path fires', () => {
-    const { ids, ratings } = settledLibrary()
-    const log: Comparison[] = [
-      { id: 'old', albumA: 'alb3', albumB: 'alb30', winner: 'alb30', comparedAt: 1 },
-      { id: 'old2', albumA: 'alb4', albumB: 'alb31', winner: 'alb31', comparedAt: 2 },
-    ]
-    // First value triggers the wildcard branch, second selects the audit path,
-    // third picks the entry from the older half of the log.
-    const pair = selectPair(ids, ratings, log, DEFAULT_MATCHMAKING, { rng: cyclingRng([0.01, 0.1, 0]) })!
-
-    expect(pair.reason).toBe('audit')
-    expect(pairKey(pair.albumA, pair.albumB)).toBe(pairKey('alb3', 'alb30'))
-  })
-
   it('keeps every focused pair on the focused album', () => {
     const { ids, ratings } = settledLibrary()
     ratings.set('newcomer', entry(1500, 350, 0))
@@ -247,6 +233,40 @@ describe('pair selection', () => {
     expect(
       selectPair(ids, ratings, [], DEFAULT_MATCHMAKING, { focusAlbumId: 'ghost' }),
     ).toBeNull()
+  })
+
+  it('never audits a pair that is still in cooldown', () => {
+    const { ids, ratings } = settledLibrary()
+    // One judged pair, answered just now: an audit of it would be asking a
+    // question the user answered seconds ago.
+    const log: Comparison[] = [
+      { id: 'fresh', albumA: 'alb3', albumB: 'alb30', winner: 'alb30', comparedAt: 1 },
+    ]
+
+    const rng = seeded(121)
+    for (let i = 0; i < 500; i += 1) {
+      const pair = selectPair(ids, ratings, log, DEFAULT_MATCHMAKING, { rng })!
+      expect(pairKey(pair.albumA, pair.albumB)).not.toBe(pairKey('alb3', 'alb30'))
+    }
+  })
+
+  it('audits an old pair once it has left cooldown', () => {
+    const { ids, ratings } = settledLibrary()
+    const log: Comparison[] = [
+      { id: 'old', albumA: 'alb3', albumB: 'alb30', winner: 'alb30', comparedAt: 1 },
+    ]
+    // Enough later traffic to age the pair past the ordinary cooldown.
+    for (let i = 0; i < 40; i += 1) {
+      log.push({ id: `c${i}`, albumA: 'alb10', albumB: 'alb11', winner: 'alb10', comparedAt: 2 + i })
+    }
+
+    // First value enters the wildcard branch, second selects the audit path,
+    // third picks from the older half of the log.
+    const pair = selectPair(ids, ratings, log, DEFAULT_MATCHMAKING, {
+      rng: cyclingRng([0.01, 0.1, 0]),
+    })!
+    expect(pair.reason).toBe('audit')
+    expect(pairKey(pair.albumA, pair.albumB)).toBe(pairKey('alb3', 'alb30'))
   })
 
   it('produces wildcards at roughly the configured rate', () => {

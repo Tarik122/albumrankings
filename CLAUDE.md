@@ -192,6 +192,44 @@ Selection is **O(albums) per call, not O(albums²)**: one side by lottery, then
 only a windowed slice of candidates scored for the other. Keep it that way — the
 library is meant to grow indefinitely.
 
+## Recommendations and insights
+
+`src/rating/insights.ts` (pure, no network) and `src/spotify/discover.ts`.
+
+**Spotify has no recommendation machinery available to us.**
+`/recommendations`, `/related-artists` and `/audio-features` were all withdrawn
+for apps under the current developer rules. So "albums like this one" cannot be
+asked for and must be assembled. Do not go looking for those endpoints again.
+
+What replaces them is the ranking itself, which is a better signal than the star
+ratings most recommenders run on — forced choices, with an uncertainty attached
+to every one:
+
+- **`artistAffinities()`** ranks artists by how far their albums sit from the
+  library mean, weighting each album by 1/RD² — its precision. That is the
+  standard way to pool estimates of differing certainty, and it stops an artist
+  carried by one lucky result from outranking a well-evidenced one.
+- **`findArtistGaps()`** is the reliable recommender: records by high-affinity
+  artists that are not in the library. It makes no similarity claim, only "you
+  rate this artist and have not heard this". Uses `/search` alone.
+- **`findGenreNeighbours()`** is best-effort discovery via artist genre tags. It
+  needs `/artists/{id}`, so it is the part most exposed to further API changes;
+  it returns a `note` explaining itself rather than throwing.
+
+Every suggestion carries a plain-language `reason`. An opaque relevance score
+would be indefensible in an app whose whole point is legible judgement.
+
+`mindChangers()` deliberately **ranks by volatility but displays contradiction
+counts.** σ barely moves off 0.06 under consistent judging, so a list of σ values
+reads as identical numbers to four decimal places — true, and useless. The
+displayed figure is results that went against the album's eventual standing.
+Albums with no contradictions are excluded rather than padding the list.
+
+`ratingHistory()` replays the log to every period boundary to draw how an
+album's rating moved. Exact rather than reconstructed, and only possible because
+the log is the source of truth — worth remembering as a concrete payoff of that
+decision.
+
 ## Data model
 
 `albums/{autoId}` — `title`, `artist`, `spotifyAlbumId` (nullable), `artUrl`,
@@ -299,7 +337,7 @@ ever changes, the ordering has to change with it.
 
 ## Testing
 
-`npm test` — 37 tests.
+`npm test` — 52 tests.
 
 The one to protect: `engine.test.ts` builds eight albums with a known intended
 order, generates consistent comparisons, then splices in a deliberately wrong

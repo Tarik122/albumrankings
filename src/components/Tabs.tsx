@@ -1,15 +1,16 @@
-export type TabId = 'compare' | 'leaderboard' | 'library' | 'settings'
+export type TabId = 'compare' | 'leaderboard' | 'discover' | 'library' | 'settings'
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'compare', label: 'Compare' },
   { id: 'leaderboard', label: 'Leaderboard' },
+  { id: 'discover', label: 'Discover' },
   { id: 'library', label: 'Library' },
   { id: 'settings', label: 'Settings' },
 ]
 
 export function Tabs({ active, onChange }: { active: TabId; onChange: (id: TabId) => void }) {
   return (
-    <nav className="flex gap-1 rounded-xl border border-ink-800 bg-ink-900 p-1">
+    <nav className="flex flex-wrap gap-1 rounded-xl border border-ink-800 bg-ink-900 p-1">
       {TABS.map((tab) => (
         <button
           key={tab.id}

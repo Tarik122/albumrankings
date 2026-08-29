@@ -35,6 +35,13 @@ Forcing a preference you don't have is exactly the noise this avoids.
   than the interface.
 - **Place one album at a time.** Add something new and rate just that, against
   a spread of what you already have, instead of working through the library.
+- **Recommendations built from your own ranking**, not from an API that no
+  longer exists — Spotify withdrew its recommendation endpoints, so suggestions
+  are assembled from artists your comparisons say you rate, and every one says
+  why it's there.
+- **Taste analysis**: where your written score disagrees with your revealed
+  preference, which albums you keep contradicting yourself on, and how any
+  album's rating moved as the log grew.
 - **Spotify import** from your saved albums, your top tracks, or your recent
   plays.
 
@@ -53,7 +60,7 @@ that path; Part B covers local development if you want it.
 npm install
 cp .env.example .env.local   # fill in — see SETUP.md
 npm run dev                  # http://127.0.0.1:5173/albumrankings/
-npm test                     # 37 tests
+npm test                     # 52 tests
 npm run build
 ```
 

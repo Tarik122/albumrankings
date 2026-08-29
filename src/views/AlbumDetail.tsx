@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { updateAlbumMeta } from '../data/albums'
 import type { Album, Comparison } from '../data/types'
 import { outcomeOf } from '../data/types'
 import type { RatingTable } from '../rating/engine'
 import { conservativeRating } from '../rating/glicko2'
+import { ratingHistory } from '../rating/insights'
 import { useAsyncAction } from '../state/store'
 
 interface Props {
@@ -44,6 +45,13 @@ export function AlbumDetail({ album, ratings, comparisons, index, onClose, onPla
 
   const rating = ratings.get(album.id)
   const record = comparisons.filter((c) => c.albumA === album.id || c.albumB === album.id)
+
+  // Only possible because ratings are a pure function of an append-only log:
+  // replaying to any prefix is exact, not reconstructed from saved snapshots.
+  const history = useMemo(
+    () => ratingHistory(album.id, [...index.keys()], comparisons),
+    [album.id, index, comparisons],
+  )
 
   const parsedScore = score.trim() === '' ? null : Number(score)
   const scoreValid =
@@ -94,6 +102,8 @@ export function AlbumDetail({ album, ratings, comparisons, index, onClose, onPla
             value={rating ? Math.round(conservativeRating(rating)) : '—'}
           />
         </div>
+
+        {history.length > 2 && <Sparkline points={history.map((p) => p.rating)} />}
 
         {rating && rating.comparisonCount < 5 && (
           <div className="mx-5 mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-ink-800 bg-ink-950 p-3">
@@ -216,6 +226,53 @@ export function AlbumDetail({ album, ratings, comparisons, index, onClose, onPla
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+/**
+ * How the rating moved as the log grew. Drawn inline rather than with a chart
+ * library: it is one polyline, and the bundle is already Firebase-heavy.
+ */
+function Sparkline({ points }: { points: number[] }) {
+  const min = Math.min(...points)
+  const max = Math.max(...points)
+  const span = max - min || 1
+  const width = 100
+  const height = 28
+
+  const path = points
+    .map((value, i) => {
+      const x = (i / (points.length - 1)) * width
+      const y = height - ((value - min) / span) * height
+    return `${i === 0 ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)}`
+    })
+    .join(' ')
+
+  return (
+    <div className="mx-5 mb-5 rounded-xl border border-ink-800 bg-ink-950 p-3">
+      <div className="flex items-baseline justify-between">
+        <p className="text-xs text-ink-500">Rating over time</p>
+        <p className="font-mono text-xs text-ink-700">
+          {Math.round(min)} – {Math.round(max)}
+        </p>
+      </div>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="none"
+        className="mt-2 h-10 w-full"
+        role="img"
+        aria-label={`Rating moved between ${Math.round(min)} and ${Math.round(max)} over ${points.length} rating periods.`}
+      >
+        <path
+          d={path}
+          fill="none"
+          stroke="var(--color-accent)"
+          strokeWidth="1.5"
+          vectorEffect="non-scaling-stroke"
+          strokeLinejoin="round"
+        />
+      </svg>
     </div>
   )
 }

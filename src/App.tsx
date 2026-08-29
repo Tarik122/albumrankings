@@ -6,6 +6,7 @@ import { useAlbumIndex, useAsyncAction, useLibrary } from './state/store'
 import { completeAuthIfRedirected } from './spotify/auth'
 import { AlbumDetail } from './views/AlbumDetail'
 import { CompareView } from './views/CompareView'
+import { DiscoverView } from './views/DiscoverView'
 import { LeaderboardView } from './views/LeaderboardView'
 import { LibraryView } from './views/LibraryView'
 import { PublicView } from './views/PublicView'
@@ -109,6 +110,14 @@ export default function App() {
             comparisons={library.comparisons}
             ratings={library.ratings}
             onOpenAlbum={setOpenAlbumId}
+          />
+        ) : tab === 'discover' ? (
+          <DiscoverView
+            albums={library.albums}
+            comparisons={library.comparisons}
+            ratings={library.ratings}
+            onOpenAlbum={setOpenAlbumId}
+            onPlaceNow={placeNow}
           />
         ) : tab === 'library' ? (
           <LibraryView albums={library.albums} onOpenAlbum={setOpenAlbumId} onPlaceNow={placeNow} />

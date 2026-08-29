@@ -97,7 +97,7 @@ export function selectPair(
   if (rng() < config.wildcardRate) {
     const wild =
       rng() < config.auditShare
-        ? auditPair(comparisons, ratings, rng)
+        ? auditPair(comparisons, ratings, blocked, rng)
         : randomPair(pool, blocked, rng)
     if (wild) return wild
   }
@@ -246,10 +246,26 @@ function sampleWeighted(scored: { c: Candidate; score: number }[], rng: Rng): Ca
   return scored[scored.length - 1].c
 }
 
-/** Priority 3a: re-offer a pair already judged, to detect drift. */
-function auditPair(comparisons: Comparison[], ratings: RatingTable, rng: Rng): Pair | null {
+/**
+ * Priority 3a: re-offer a pair already judged, to detect drift.
+ *
+ * Respects the cooldown like everything else. An audit is asking "do you still
+ * think this?", which is only a meaningful question once some time has passed —
+ * re-offering a pair you answered a moment ago tests nothing and reads as a
+ * glitch.
+ */
+function auditPair(
+  comparisons: Comparison[],
+  ratings: RatingTable,
+  blocked: Set<string>,
+  rng: Rng,
+): Pair | null {
   const judged = comparisons.filter(
-    (c) => outcomeOf(c) !== 'skip' && ratings.has(c.albumA) && ratings.has(c.albumB),
+    (c) =>
+      outcomeOf(c) !== 'skip' &&
+      ratings.has(c.albumA) &&
+      ratings.has(c.albumB) &&
+      !blocked.has(pairKey(c.albumA, c.albumB)),
   )
   if (judged.length === 0) return null
   // Bias towards the older half of the log: those are the verdicts most likely

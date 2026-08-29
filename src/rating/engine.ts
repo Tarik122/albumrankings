@@ -69,6 +69,12 @@ export function computeRatings(
   albumIds: Iterable<string>,
   comparisons: Comparison[],
   config: EngineConfig = DEFAULT_ENGINE_CONFIG,
+  /**
+   * Called after each rating period with the live table. The table is mutated
+   * in place by subsequent periods, so a caller wanting to keep anything must
+   * copy it. Used to build rating histories without a second replay.
+   */
+  onPeriod?: (periodIndex: number, table: RatingTable) => void,
 ): RatingTable {
   const table: RatingTable = new Map()
   for (const id of albumIds) table.set(id, blank())
@@ -104,6 +110,7 @@ export function computeRatings(
 
   for (let i = 0; i < rated.length; i += config.periodSize) {
     applyPeriod(table, rated.slice(i, i + config.periodSize), config)
+    onPeriod?.(i / config.periodSize, table)
   }
 
   return table
