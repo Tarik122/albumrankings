@@ -17,7 +17,7 @@
  */
 
 import { comparisonInformation, type Rating } from './glicko2'
-import type { AlbumRating, EngineConfig, RatingTable } from './engine'
+import type { AlbumRating, RatingTable } from './engine'
 import type { Comparison } from '../data/types'
 import { outcomeOf } from '../data/types'
 

@@ -17,7 +17,6 @@ function mulberry32(seed: number): () => number {
 
 /** Eight albums, best first. The order the engine is expected to recover. */
 const TRUE_ORDER = ['a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8']
-const rankOf = (id: string) => TRUE_ORDER.indexOf(id)
 
 let clock = 0
 function comparison(albumA: string, albumB: string, winner: string): Comparison {

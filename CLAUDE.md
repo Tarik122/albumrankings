@@ -1,0 +1,237 @@
+# Album Ranker — architecture and decisions
+
+A single-user web app that ranks an album library by pairwise comparison
+("which of these two is better?") rather than by assigning scores. Static site,
+no backend of any kind.
+
+This file exists so a future session does not have to re-derive the reasoning
+below. If you change one of these decisions, change this file too.
+
+## Constraints that shaped everything
+
+- **Static hosting only.** GitHub Pages. No server, no serverless functions, no
+  backend. Everything — including the Spotify OAuth flow — runs in the browser.
+- **Single user.** There is no account system, no invites, no roles. Firebase
+  Auth exists only to produce a UID that the Firestore rules can be pinned to.
+- **The library is large and always growing.** Hundreds of albums now, more
+  indefinitely. Nothing may assume every pair will eventually be compared.
+- **The judge is fallible.** Any individual comparison may be careless,
+  inconsistent, or mood-driven. The system has to absorb that.
+
+## Stack
+
+React 19 + Vite + TypeScript + Tailwind v4 + Firebase JS SDK (Firestore +
+Auth). Vitest for tests.
+
+- **TypeScript**, though the brief did not specify it: the rating maths and the
+  Firestore document shapes are exactly where a silent type error would be
+  expensive and invisible.
+- **No router.** Four tabs held in component state. This avoids the GitHub
+  Pages SPA-404 problem entirely and keeps the Spotify redirect URI a clean,
+  fragment-free base URL, which Spotify requires.
+- **Firebase over Supabase.** Two small collections, no relational queries, no
+  reason to prefer Postgres. Not worth the switching cost.
+
+## The central design decision: the log is the source of truth
+
+`comparisons/` is an append-only log. Ratings are a **pure function** of that
+log, recomputed by replaying it (`src/rating/engine.ts`). The `rating`,
+`ratingDeviation`, `volatility` and `comparisonCount` fields on `albums/`
+documents are a **cache**, written back after each replay, and nothing ever
+treats them as authoritative.
+
+This costs almost nothing — a few thousand comparisons over a few hundred
+albums replays in well under a frame — and buys the property the whole project
+depends on: **every tuning decision is reversible.** Change τ, change the
+rating period size, change how ties are weighted, and the entire history is
+re-scored correctly on the next load. Had ratings been stored incrementally,
+each of those knobs would have been a one-way door.
+
+The Firestore rules enforce append-only server-side: `create` is allowed,
+`update` and `delete` are denied outright.
+
+## Glicko-2
+
+Implemented in `src/rating/glicko2.ts` from Glickman's specification, and
+verified in `glicko2.test.ts` against the worked example in that paper. Do not
+"simplify" this module without re-running that test — it is the only thing
+proving this is Glicko-2 and not a lookalike.
+
+Each album carries a rating (μ, ~1500-centred), a rating deviation (RD/φ, its
+uncertainty), and a volatility (σ, how erratic its results have been). New
+albums start at 1500 ± 350.
+
+**Why Glicko-2 and not Elo:** the volatility term is what makes one biased or
+careless answer survivable. An album with a long consistent record has low σ, so
+a surprising result produces a large Δ against small volatility — the solver
+raises σ modestly instead of swinging μ. That mechanism *is* the outlier
+handling; there is deliberately no separate outlier-rejection layer bolted on.
+
+### Rating periods
+
+Glicko-2 is defined over *batches* of games, not single results — the batching
+is where the volatility estimate gets its stability. So comparisons are bucketed
+into fixed-size rating periods (default 15, `EngineConfig.periodSize`).
+
+The final, partially-filled period is still evaluated, so the UI moves the
+moment you vote. When that period later fills, the same computation becomes the
+committed one — so the rating shown and the rating stored never diverge.
+
+Within a period, every album is updated simultaneously against the ratings held
+at the *start* of the period. Results inside one period cannot cascade into each
+other. That is what makes the replay order-independent, which `engine.test.ts`
+asserts directly.
+
+### Two deliberate departures from textbook Glicko-2
+
+Both are in `Glicko2Config` and both are documented at their definitions.
+
+1. **Idle RD inflation is damped** (`idleInflation`, default 0.15). Standard
+   Glicko-2 inflates a player's uncertainty every period they do not play,
+   because human skill drifts during inactivity. Album quality does not drift —
+   only the listener's opinion does, and far more slowly. Applied unmodified to
+   a 500-album library where each period touches ~30 slots, almost every album
+   would be inflated almost every period, and RD would climb back towards 350
+   until the ranking dissolved into uncertainty. `glicko2.test.ts` covers this
+   directly, comparing damped against textbook behaviour over 200 idle periods.
+
+2. **RD is capped for established albums** (`maxEstablishedRd` 150, after
+   `establishedAfter` 5 comparisons), as a second line of defence on the same
+   problem.
+
+If these ever look wrong, they are safe to change — replay fixes the history.
+
+### Outcomes
+
+Four outcomes, and the distinction between the last two matters:
+
+| Outcome | Stored `winner` | Effect on ratings |
+|---|---|---|
+| A wins | `albumA`'s id | s = 1 for A |
+| B wins | `albumB`'s id | s = 1 for B |
+| Tie | `'tie'` | s = 0.5 both sides — a real signal that pulls them together |
+| Skip | `'skip'` | **none** — logged for the record, excluded from the maths |
+
+A tie means "these are genuinely equal", which is information. A skip means "I
+cannot judge this pair", which is missing data. Feeding a skip in as a draw
+would record a claim about equality that was never made — exactly the noise this
+project exists to avoid. Skips also put the pair into a long matchmaking
+cooldown (`skipCooldown`, 200 comparisons).
+
+## Matchmaking
+
+`src/rating/matchmaking.ts`. Priorities, in order:
+
+1. **Place new / high-uncertainty albums.** The first slot is a weighted
+   lottery on RD² with a bonus for albums below `placementTarget`.
+2. **Otherwise, the most informative pair**: close ratings, with real
+   uncertainty on at least one side.
+3. **~10% wildcard**, half of which re-offers an already-judged pair to catch
+   drift and contradictions (`reason: 'audit'`).
+
+Two things worth preserving:
+
+- **The scoring function is Glicko-2's own information term.**
+  `comparisonInformation()` is the per-opponent term of the variance estimate
+  `v` — the Fisher information of the comparison. It peaks exactly when the
+  outcome is a genuine toss-up. Multiplying it by the summed RD is what
+  expresses "close *and* still uncertain". No separate heuristic needed.
+- **Placement spread falls out of RD itself.** A newcomer's opponent is aimed at
+  `rating ± random × RD`. At RD 350 that ranges across the whole library; as the
+  estimate firms up, the same rule automatically narrows onto near neighbours.
+  There is no separate binary-search ladder, and there does not need to be.
+
+Selection is **O(albums) per call, not O(albums²)**: one side by lottery, then
+only a windowed slice of candidates scored for the other. Keep it that way — the
+library is meant to grow indefinitely.
+
+## Data model
+
+`albums/{autoId}` — `title`, `artist`, `spotifyAlbumId` (nullable), `artUrl`,
+`releaseYear`, `addedAt`, `source`, `dedupKey`, `rating`, `ratingDeviation`,
+`volatility`, `comparisonCount`.
+
+`comparisons/{autoId}` — `albumA`, `albumB`, `winner` (an album id, or `'tie'`,
+or `'skip'`), `comparedAt`.
+
+**Document ids are Firestore auto-ids, not Spotify ids.** Deduplication runs on
+`spotifyAlbumId` first, then on `dedupKey` — a normalised `artist::title` that
+strips case, accents, punctuation, and the edition suffixes Spotify appends
+("Deluxe", "Remastered", "… Anniversary Edition"). This is deliberate: an album
+added by hand today can be matched to Spotify later *without changing its id*,
+so every comparison already logged against it survives. Keying documents by
+Spotify id would have made that migration orphan its own history.
+
+`winner` stores an album **id** rather than `'a'`/`'b'` so a log entry stays
+meaningful on its own.
+
+## Spotify
+
+`src/spotify/`. Authorization Code with **PKCE** — the only flow that works from
+a static site with no backend to hold a secret. Tokens live in `localStorage`,
+the PKCE verifier in `sessionStorage` (single-use, should not outlive its tab).
+
+Access tokens expire in an hour, so refresh handling is not optional. Spotify
+rotates the refresh token on some refreshes, so the response is always re-read
+for a new one. Concurrent callers share one in-flight refresh, so a burst of
+imports cannot spend the refresh token twice.
+
+Scopes: `user-top-read`, `user-read-recently-played`.
+
+### API constraints under the current developer rules
+
+These are not oversights — do not "fix" them by reaching for the endpoints
+below:
+
+- **There is no "top albums" endpoint.** Top albums are approximated from
+  `/me/top/tracks` across all three time ranges, rolled up to parent albums,
+  weighted by track rank. Singles and sub-3-track releases are filtered out.
+- **`/me/player/recently-played` caps at 50 items** with no deeper history. The
+  suggestion feed is a rolling window, not a full play log.
+- **Album search `limit` maxes at 10**, not 50. The search UX is built for
+  narrow queries (artist + album together), not paging.
+- **The batch "several albums" endpoint was removed.** `/albums/{id}` is one at
+  a time — use `throttled()` in `api.ts` when enriching many.
+- **Album `popularity` was removed** from the album object. Nothing may depend
+  on it.
+- **Removed entirely, do not use:** `/artists/{id}/top-tracks`,
+  `/browse/new-releases`, `/recommendations`, `/audio-features`,
+  `/audio-analysis`, `/related-artists`.
+- **Developer Mode** requires the owner's Spotify account to be Premium and
+  listed in the app's user-management page. A 403 almost always means one of
+  those two, and `api.ts` says so in the error message.
+
+## Security
+
+The Firebase config and the Spotify client id are **public**, and that is fine —
+GitHub Pages serves a public bundle, so anything shipped in it is visible.
+Security comes entirely from `firestore.rules`.
+
+The rules check `request.auth.uid == '<specific UID>'`, **not**
+`request.auth != null`. Anyone can create a Google account and authenticate
+against this Firebase project, so "is signed in" would be no protection at all.
+
+`isOwner()` in `src/data/auth.ts` is a UI convenience only — it shows a useful
+message instead of a wall of permission-denied errors. It is not enforcement and
+cannot be.
+
+Setup order matters: before `VITE_OWNER_UID` is set, the app treats the first
+signed-in user as owner so it can show them the UID they need to paste in. The
+Settings tab warns loudly until this is done. See `SETUP.md` step 5.
+
+## Testing
+
+`npm test` — 33 tests.
+
+The one to protect: `engine.test.ts` builds eight albums with a known intended
+order, generates consistent comparisons, then splices in a deliberately wrong
+one (worst album beats best) and asserts the true order is still recovered. That
+is the noise-resistance claim, checked rather than asserted.
+
+`CompareView.test.tsx` covers the comparison UI with Firestore stubbed —
+keyboard voting, tie-vs-skip, pair advancement, and the write-failure path.
+
+## Deliberately out of scope
+
+Multi-user accounts. Any backend or serverless component. Offline support. A
+native app. Anything needing Spotify Extended Quota approval.

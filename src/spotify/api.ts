@@ -13,11 +13,11 @@ import { getAccessToken } from './auth'
 const BASE = 'https://api.spotify.com/v1'
 
 export class SpotifyError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
+  readonly status: number
+
+  constructor(message: string, status: number) {
     super(message)
+    this.status = status
   }
 }
 

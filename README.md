@@ -1,32 +1,51 @@
-# React + TypeScript + Vite
+# Album Ranker
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Rank a large, growing album library by pairwise comparison — "which of these two
+is better?" — instead of inventing scores out of nowhere.
 
-Currently, two official plugins are available:
+Static site: React + Vite + Firebase, deployed to GitHub Pages. No backend.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Why pairwise, and why Glicko-2
 
-## React Compiler
+Assigning an album 8.5/10 requires a scale you don't really have. Picking
+between two albums is a judgement you can actually make. But any single
+comparison might be careless or mood-driven, so the rating system has to absorb
+that rather than trust each answer.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Glicko-2 tracks three numbers per album: a rating, an uncertainty (RD), and a
+**volatility**. An album with a long consistent record has low volatility, so a
+surprising result nudges its uncertainty up rather than swinging its rating. One
+bad answer doesn't wreck a ranking.
 
-## Expanding the Oxlint configuration
+Every comparison is written to an append-only log, and ratings are recomputed by
+replaying that log. Nothing is baked in — tuning the algorithm re-scores your
+whole history.
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+You can also say **"too close to call"** (a real tie, which pulls two ratings
+together) or **"skip"** (no opinion, recorded but excluded from the maths).
+Forcing a preference you don't have is exactly the noise this avoids.
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+## Setup
+
+See **[SETUP.md](./SETUP.md)** — Firebase, Spotify, and GitHub Pages, in order.
+About 30 minutes.
+
+## Development
+
+```bash
+npm install
+cp .env.example .env.local   # fill in — see SETUP.md
+npm run dev                  # http://127.0.0.1:5173/albumrankings/
+npm test                     # 33 tests
+npm run build
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+`127.0.0.1`, not `localhost` — Spotify won't accept `localhost` as a redirect
+URI, so the dev server binds to the loopback IP to match.
+
+## Architecture
+
+See **[CLAUDE.md](./CLAUDE.md)** for the design decisions and the reasoning
+behind them — rating periods, the two deliberate departures from textbook
+Glicko-2, how matchmaking picks pairs, and which Spotify endpoints no longer
+exist.
